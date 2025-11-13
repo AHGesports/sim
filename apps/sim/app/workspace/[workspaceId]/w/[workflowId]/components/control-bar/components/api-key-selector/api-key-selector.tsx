@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Check, Copy, Info, Loader2, Plus } from 'lucide-react'
 import { useParams } from 'next/navigation'
+import { Tooltip } from '@/components/emcn'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,10 +23,6 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
 } from '@/components/ui'
 import { createLogger } from '@/lib/logs/console/logger'
 import { useUserPermissionsContext } from '@/app/workspace/[workspaceId]/providers/workspace-permissions-provider'
@@ -171,16 +168,15 @@ export function ApiKeySelector({
         {showLabel && (
           <div className='flex items-center gap-1.5'>
             <Label className='font-medium text-sm'>{label}</Label>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className='h-3.5 w-3.5 text-muted-foreground' />
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Owner is billed for usage</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <Info className='h-3.5 w-3.5 text-muted-foreground' />
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                <p>Owner is billed for usage</p>
+              </Tooltip.Content>
+            </Tooltip.Root>
           </div>
         )}
         <div className='rounded-md border bg-background'>
@@ -221,16 +217,15 @@ export function ApiKeySelector({
           <div className='flex items-center justify-between'>
             <div className='flex items-center gap-1.5'>
               <Label className='font-medium text-sm'>{label}</Label>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className='h-3.5 w-3.5 text-muted-foreground' />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Key Owner is Billed</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+
+              <Tooltip.Root>
+                <Tooltip.Trigger asChild>
+                  <Info className='h-3.5 w-3.5 text-muted-foreground' />
+                </Tooltip.Trigger>
+                <Tooltip.Content>
+                  <p>Key Owner is Billed</p>
+                </Tooltip.Content>
+              </Tooltip.Root>
             </div>
             {!disabled && (
               <Button

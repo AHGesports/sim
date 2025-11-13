@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { Check, ChevronDown, LibraryBig, Plus } from 'lucide-react'
 import { useParams } from 'next/navigation'
-import { Button } from '@/components/ui/button'
+import { Button, Tooltip } from '@/components/emcn'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +11,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   BaseOverview,
   CreateModal,
@@ -111,7 +110,7 @@ export function Knowledge() {
                     {/* Sort Dropdown */}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant='outline' size='sm' className={filterButtonClass}>
+                        <Button variant='outline' className={filterButtonClass}>
                           {currentSortLabel}
                           <ChevronDown className='ml-2 h-4 w-4 text-muted-foreground' />
                         </Button>
@@ -143,8 +142,8 @@ export function Knowledge() {
                     </DropdownMenu>
 
                     {/* Create Button */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
+                    <Tooltip.Root>
+                      <Tooltip.Trigger asChild>
                         <PrimaryButton
                           onClick={() => setIsCreateModalOpen(true)}
                           disabled={userPermissions.canEdit !== true}
@@ -152,13 +151,13 @@ export function Knowledge() {
                           <Plus className='h-3.5 w-3.5' />
                           <span>Create</span>
                         </PrimaryButton>
-                      </TooltipTrigger>
+                      </Tooltip.Trigger>
                       {userPermissions.canEdit !== true && (
-                        <TooltipContent>
+                        <Tooltip.Content>
                           Write permission required to create knowledge bases
-                        </TooltipContent>
+                        </Tooltip.Content>
                       )}
-                    </Tooltip>
+                    </Tooltip.Root>
                   </div>
                 </div>
 

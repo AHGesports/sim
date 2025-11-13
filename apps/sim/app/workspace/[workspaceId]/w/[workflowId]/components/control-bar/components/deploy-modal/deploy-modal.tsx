@@ -17,9 +17,10 @@ import { getEnv } from '@/lib/env'
 import { createLogger } from '@/lib/logs/console/logger'
 import { cn } from '@/lib/utils'
 import type { WorkflowDeploymentVersionResponse } from '@/lib/workflows/db-helpers'
+import { resolveStartCandidates, StartBlockPath } from '@/lib/workflows/triggers'
 import {
-  DeployForm,
   DeploymentInfo,
+  TemplateDeploy,
 } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/control-bar/components/deploy-modal/components'
 import { ChatDeploy } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/control-bar/components/deploy-modal/components/chat-deploy/chat-deploy'
 import { DeployedWorkflowModal } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/control-bar/components/deployment-controls/components/deployed-workflow-modal'
@@ -29,7 +30,6 @@ import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import type { WorkflowState } from '@/stores/workflows/workflow/types'
 
 const logger = createLogger('DeployModal')
-
 interface DeployModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -41,15 +41,6 @@ interface DeployModalProps {
   refetchDeployedState: () => Promise<void>
 }
 
-interface ApiKey {
-  id: string
-  name: string
-  key: string
-  lastUsed?: string
-  createdAt: string
-  expiresAt?: string
-}
-
 interface WorkflowDeploymentInfo {
   isDeployed: boolean
   deployedAt?: string
@@ -59,12 +50,7 @@ interface WorkflowDeploymentInfo {
   needsRedeployment: boolean
 }
 
-interface DeployFormValues {
-  apiKey: string
-  newKeyName?: string
-}
-
-type TabView = 'general' | 'api' | 'versions' | 'chat'
+type TabView = 'api' | 'versions' | 'chat' | 'template'
 
 export function DeployModal({
   open,
@@ -85,9 +71,11 @@ export function DeployModal({
   const [isUndeploying, setIsUndeploying] = useState(false)
   const [deploymentInfo, setDeploymentInfo] = useState<WorkflowDeploymentInfo | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
-  const [activeTab, setActiveTab] = useState<TabView>('general')
-  const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>('')
+  const workflowMetadata = useWorkflowRegistry((state) =>
+    workflowId ? state.workflows[workflowId] : undefined
+  )
+  const workflowWorkspaceId = workflowMetadata?.workspaceId ?? null
+  const [activeTab, setActiveTab] = useState<TabView>('api')
   const [chatSubmitting, setChatSubmitting] = useState(false)
   const [apiDeployError, setApiDeployError] = useState<string | null>(null)
   const [chatExists, setChatExists] = useState(false)
@@ -116,17 +104,31 @@ export function DeployModal({
     }
   }, [editingVersion])
 
+  const getApiKeyLabel = (value?: string | null) => {
+    if (value && value.trim().length > 0) {
+      return value
+    }
+    return workflowWorkspaceId ? 'Workspace API keys' : 'Personal API keys'
+  }
+
+  const getApiHeaderPlaceholder = () =>
+    workflowWorkspaceId ? 'YOUR_WORKSPACE_API_KEY' : 'YOUR_PERSONAL_API_KEY'
+
   const getInputFormatExample = (includeStreaming = false) => {
     let inputFormatExample = ''
     try {
       const blocks = Object.values(useWorkflowStore.getState().blocks)
+      const candidates = resolveStartCandidates(useWorkflowStore.getState().blocks, {
+        execution: 'api',
+      })
 
-      // Check for API trigger block first (takes precedence)
-      const apiTriggerBlock = blocks.find((block) => block.type === 'api_trigger')
-      // Fall back to legacy starter block
-      const starterBlock = blocks.find((block) => block.type === 'starter')
+      const targetCandidate =
+        candidates.find((candidate) => candidate.path === StartBlockPath.UNIFIED) ||
+        candidates.find((candidate) => candidate.path === StartBlockPath.SPLIT_API) ||
+        candidates.find((candidate) => candidate.path === StartBlockPath.SPLIT_INPUT) ||
+        candidates.find((candidate) => candidate.path === StartBlockPath.LEGACY_STARTER)
 
-      const targetBlock = apiTriggerBlock || starterBlock
+      const targetBlock = targetCandidate?.block
 
       if (targetBlock) {
         const inputFormat = useSubBlockStore.getState().getValue(targetBlock.id, 'inputFormat')
@@ -173,27 +175,44 @@ export function DeployModal({
           // Convert blockId_attribute format to blockName.attribute format for display
           const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 
-          const convertedOutputs = selectedStreamingOutputs.map((outputId) => {
-            // If it starts with a UUID, convert to blockName.attribute format
-            if (UUID_REGEX.test(outputId)) {
-              const underscoreIndex = outputId.indexOf('_')
-              if (underscoreIndex === -1) return outputId
+          const convertedOutputs = selectedStreamingOutputs
+            .map((outputId) => {
+              // If it starts with a UUID, convert to blockName.attribute format
+              if (UUID_REGEX.test(outputId)) {
+                const underscoreIndex = outputId.indexOf('_')
+                if (underscoreIndex === -1) return null
 
-              const blockId = outputId.substring(0, underscoreIndex)
-              const attribute = outputId.substring(underscoreIndex + 1)
+                const blockId = outputId.substring(0, underscoreIndex)
+                const attribute = outputId.substring(underscoreIndex + 1)
 
-              // Find the block by ID and get its name
-              const block = blocks.find((b) => b.id === blockId)
-              if (block?.name) {
-                // Normalize block name: lowercase and remove spaces
-                const normalizedBlockName = block.name.toLowerCase().replace(/\s+/g, '')
-                return `${normalizedBlockName}.${attribute}`
+                // Find the block by ID and get its name
+                const block = blocks.find((b) => b.id === blockId)
+                if (block?.name) {
+                  // Normalize block name: lowercase and remove spaces
+                  const normalizedBlockName = block.name.toLowerCase().replace(/\s+/g, '')
+                  return `${normalizedBlockName}.${attribute}`
+                }
+                // Block not found (deleted), return null to filter out
+                return null
               }
-            }
 
-            // Already in blockName.attribute format or couldn't convert
-            return outputId
-          })
+              // Already in blockName.attribute format, verify the block exists
+              const parts = outputId.split('.')
+              if (parts.length >= 2) {
+                const blockName = parts[0]
+                // Check if a block with this name exists
+                const block = blocks.find(
+                  (b) => b.name?.toLowerCase().replace(/\s+/g, '') === blockName.toLowerCase()
+                )
+                if (!block) {
+                  // Block not found (deleted), return null to filter out
+                  return null
+                }
+              }
+
+              return outputId
+            })
+            .filter((output): output is string => output !== null)
 
           exampleData.selectedOutputs = convertedOutputs
         }
@@ -207,21 +226,6 @@ export function DeployModal({
     }
 
     return inputFormatExample
-  }
-
-  const fetchApiKeys = async () => {
-    if (!open) return
-
-    try {
-      const response = await fetch('/api/users/me/api-keys')
-
-      if (response.ok) {
-        const data = await response.json()
-        setApiKeys(data.keys || [])
-      }
-    } catch (error) {
-      logger.error('Error fetching API keys:', { error })
-    }
   }
 
   const fetchChatDeploymentInfo = async () => {
@@ -252,39 +256,19 @@ export function DeployModal({
   useEffect(() => {
     if (open) {
       setIsLoading(true)
-      fetchApiKeys()
       fetchChatDeploymentInfo()
       setActiveTab('api')
       setVersionToActivate(null)
     } else {
-      setSelectedApiKeyId('')
       setVersionToActivate(null)
     }
   }, [open, workflowId])
 
   useEffect(() => {
-    if (apiKeys.length === 0) return
-
-    if (deploymentInfo?.apiKey) {
-      const matchingKey = apiKeys.find((k) => k.key === deploymentInfo.apiKey)
-      if (matchingKey) {
-        setSelectedApiKeyId(matchingKey.id)
-        return
-      }
-    }
-
-    if (!selectedApiKeyId) {
-      setSelectedApiKeyId(apiKeys[0].id)
-    }
-  }, [deploymentInfo, apiKeys])
-
-  useEffect(() => {
     async function fetchDeploymentInfo() {
       if (!open || !workflowId || !isDeployed) {
         setDeploymentInfo(null)
-        if (!open) {
-          setIsLoading(false)
-        }
+        setIsLoading(false)
         return
       }
 
@@ -305,13 +289,14 @@ export function DeployModal({
         const data = await response.json()
         const endpoint = `${getEnv('NEXT_PUBLIC_APP_URL')}/api/workflows/${workflowId}/execute`
         const inputFormatExample = getInputFormatExample(selectedStreamingOutputs.length > 0)
+        const placeholderKey = workflowWorkspaceId ? 'YOUR_WORKSPACE_API_KEY' : 'YOUR_API_KEY'
 
         setDeploymentInfo({
           isDeployed: data.isDeployed,
           deployedAt: data.deployedAt,
-          apiKey: data.apiKey,
+          apiKey: data.apiKey || placeholderKey,
           endpoint,
-          exampleCommand: `curl -X POST -H "X-API-Key: ${data.apiKey}" -H "Content-Type: application/json"${inputFormatExample} ${endpoint}`,
+          exampleCommand: `curl -X POST -H "X-API-Key: ${placeholderKey}" -H "Content-Type: application/json"${inputFormatExample} ${endpoint}`,
           needsRedeployment,
         })
       } catch (error) {
@@ -324,13 +309,11 @@ export function DeployModal({
     fetchDeploymentInfo()
   }, [open, workflowId, isDeployed, needsRedeployment, deploymentInfo?.isDeployed])
 
-  const onDeploy = async (data: DeployFormValues) => {
+  const onDeploy = async () => {
     setApiDeployError(null)
 
     try {
       setIsSubmitting(true)
-
-      const apiKeyToUse = data.apiKey || selectedApiKeyId
 
       let deployEndpoint = `/api/workflows/${workflowId}/deploy`
       if (versionToActivate !== null) {
@@ -343,7 +326,6 @@ export function DeployModal({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          apiKey: apiKeyToUse,
           deployChatEnabled: false,
         }),
       })
@@ -358,14 +340,9 @@ export function DeployModal({
       const isActivating = versionToActivate !== null
       const isDeployedStatus = isActivating ? true : (responseData.isDeployed ?? false)
       const deployedAtTime = responseData.deployedAt ? new Date(responseData.deployedAt) : undefined
-      const apiKeyFromResponse = responseData.apiKey || apiKeyToUse
+      const apiKeyLabel = getApiKeyLabel(responseData.apiKey)
 
-      setDeploymentStatus(workflowId, isDeployedStatus, deployedAtTime, apiKeyFromResponse)
-
-      const matchingKey = apiKeys.find((k) => k.key === apiKeyFromResponse || k.id === apiKeyToUse)
-      if (matchingKey) {
-        setSelectedApiKeyId(matchingKey.id)
-      }
+      setDeploymentStatus(workflowId, isDeployedStatus, deployedAtTime, apiKeyLabel)
 
       const isActivatingVersion = versionToActivate !== null
       setNeedsRedeployment(isActivatingVersion)
@@ -381,19 +358,23 @@ export function DeployModal({
         const deploymentData = await deploymentInfoResponse.json()
         const apiEndpoint = `${getEnv('NEXT_PUBLIC_APP_URL')}/api/workflows/${workflowId}/execute`
         const inputFormatExample = getInputFormatExample(selectedStreamingOutputs.length > 0)
+        const placeholderKey = getApiHeaderPlaceholder()
 
         setDeploymentInfo({
           isDeployed: deploymentData.isDeployed,
           deployedAt: deploymentData.deployedAt,
-          apiKey: deploymentData.apiKey,
+          apiKey: getApiKeyLabel(deploymentData.apiKey),
           endpoint: apiEndpoint,
-          exampleCommand: `curl -X POST -H "X-API-Key: ${deploymentData.apiKey}" -H "Content-Type: application/json"${inputFormatExample} ${apiEndpoint}`,
+          exampleCommand: `curl -X POST -H "X-API-Key: ${placeholderKey}" -H "Content-Type: application/json"${inputFormatExample} ${apiEndpoint}`,
           needsRedeployment: isActivatingVersion,
         })
       }
 
       setVersionToActivate(null)
       setApiDeployError(null)
+
+      // Templates connected to this workflow are automatically updated with the new state
+      // The deployWorkflow function handles updating template states in db-helpers.ts
     } catch (error: unknown) {
       logger.error('Error deploying workflow:', { error })
       const errorMessage = error instanceof Error ? error.message : 'Failed to deploy workflow'
@@ -426,6 +407,60 @@ export function DeployModal({
       fetchVersions()
     }
   }, [open, workflowId])
+
+  // Clean up selectedStreamingOutputs when blocks are deleted
+  useEffect(() => {
+    if (!open || selectedStreamingOutputs.length === 0) return
+
+    const blocks = Object.values(useWorkflowStore.getState().blocks)
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
+    const validOutputs = selectedStreamingOutputs.filter((outputId) => {
+      // If it starts with a UUID, extract the blockId and check if the block exists
+      if (UUID_REGEX.test(outputId)) {
+        const underscoreIndex = outputId.indexOf('_')
+        if (underscoreIndex === -1) return false
+
+        const blockId = outputId.substring(0, underscoreIndex)
+        const block = blocks.find((b) => b.id === blockId)
+        return !!block
+      }
+
+      // If it's in blockName.attribute format, check if a block with that name exists
+      const parts = outputId.split('.')
+      if (parts.length >= 2) {
+        const blockName = parts[0]
+        const block = blocks.find(
+          (b) => b.name?.toLowerCase().replace(/\s+/g, '') === blockName.toLowerCase()
+        )
+        return !!block
+      }
+
+      return true
+    })
+
+    // Update the state if any outputs were filtered out
+    if (validOutputs.length !== selectedStreamingOutputs.length) {
+      setSelectedStreamingOutputs(validOutputs)
+    }
+  }, [open, selectedStreamingOutputs, setSelectedStreamingOutputs])
+
+  // Listen for event to reopen deploy modal
+  useEffect(() => {
+    const handleOpenDeployModal = (event: Event) => {
+      const customEvent = event as CustomEvent<{ tab?: TabView }>
+      onOpenChange(true)
+      if (customEvent.detail?.tab) {
+        setActiveTab(customEvent.detail.tab)
+      }
+    }
+
+    window.addEventListener('open-deploy-modal', handleOpenDeployModal)
+
+    return () => {
+      window.removeEventListener('open-deploy-modal', handleOpenDeployModal)
+    }
+  }, [onOpenChange])
 
   const handleActivateVersion = (version: number) => {
     setVersionToActivate(version)
@@ -543,7 +578,7 @@ export function DeployModal({
         workflowId,
         newDeployStatus,
         deployedAt ? new Date(deployedAt) : undefined,
-        apiKey
+        getApiKeyLabel(apiKey)
       )
 
       setNeedsRedeployment(false)
@@ -573,7 +608,7 @@ export function DeployModal({
 
     const isActivating = versionToActivate !== null
 
-    setDeploymentStatus(workflowId, true, new Date())
+    setDeploymentStatus(workflowId, true, new Date(), getApiKeyLabel())
 
     const deploymentInfoResponse = await fetch(`/api/workflows/${workflowId}/deploy`)
     if (deploymentInfoResponse.ok) {
@@ -581,12 +616,14 @@ export function DeployModal({
       const apiEndpoint = `${getEnv('NEXT_PUBLIC_APP_URL')}/api/workflows/${workflowId}/execute`
       const inputFormatExample = getInputFormatExample(selectedStreamingOutputs.length > 0)
 
+      const placeholderKey = getApiHeaderPlaceholder()
+
       setDeploymentInfo({
         isDeployed: deploymentData.isDeployed,
         deployedAt: deploymentData.deployedAt,
-        apiKey: deploymentData.apiKey,
+        apiKey: getApiKeyLabel(deploymentData.apiKey),
         endpoint: apiEndpoint,
-        exampleCommand: `curl -X POST -H "X-API-Key: ${deploymentData.apiKey}" -H "Content-Type: application/json"${inputFormatExample} ${apiEndpoint}`,
+        exampleCommand: `curl -X POST -H "X-API-Key: ${placeholderKey}" -H "Content-Type: application/json"${inputFormatExample} ${apiEndpoint}`,
         needsRedeployment: isActivating,
       })
     }
@@ -673,78 +710,83 @@ export function DeployModal({
                 >
                   Versions
                 </button>
+                <button
+                  onClick={() => setActiveTab('template')}
+                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                    activeTab === 'template'
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+                  }`}
+                >
+                  Template
+                </button>
               </div>
             </div>
 
             <div className='flex-1 overflow-y-auto'>
               <div className='p-6' key={`${activeTab}-${versionToActivate}`}>
                 {activeTab === 'api' && (
-                  <>
-                    {versionToActivate !== null ? (
-                      <>
-                        {apiDeployError && (
-                          <div className='mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive text-sm'>
-                            <div className='font-semibold'>API Deployment Error</div>
-                            <div>{apiDeployError}</div>
-                          </div>
-                        )}
-
-                        <div className='-mx-1 px-1'>
-                          <DeployForm
-                            apiKeys={apiKeys}
-                            selectedApiKeyId={selectedApiKeyId}
-                            onApiKeyChange={setSelectedApiKeyId}
-                            onSubmit={onDeploy}
-                            onApiKeyCreated={fetchApiKeys}
-                            formId='deploy-api-form'
-                            isDeployed={false}
-                            deployedApiKeyDisplay={undefined}
-                          />
-                        </div>
-                      </>
-                    ) : isDeployed ? (
-                      <>
-                        <DeploymentInfo
-                          isLoading={isLoading}
-                          deploymentInfo={
-                            deploymentInfo ? { ...deploymentInfo, needsRedeployment } : null
-                          }
-                          onRedeploy={handleRedeploy}
-                          onUndeploy={handleUndeploy}
-                          isSubmitting={isSubmitting}
-                          isUndeploying={isUndeploying}
-                          workflowId={workflowId}
-                          deployedState={deployedState}
-                          isLoadingDeployedState={isLoadingDeployedState}
-                          getInputFormatExample={getInputFormatExample}
-                          selectedStreamingOutputs={selectedStreamingOutputs}
-                          onSelectedStreamingOutputsChange={setSelectedStreamingOutputs}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        {apiDeployError && (
-                          <div className='mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive text-sm'>
-                            <div className='font-semibold'>API Deployment Error</div>
-                            <div>{apiDeployError}</div>
-                          </div>
-                        )}
-
-                        <div className='-mx-1 px-1'>
-                          <DeployForm
-                            apiKeys={apiKeys}
-                            selectedApiKeyId={selectedApiKeyId}
-                            onApiKeyChange={setSelectedApiKeyId}
-                            onSubmit={onDeploy}
-                            onApiKeyCreated={fetchApiKeys}
-                            formId='deploy-api-form'
-                            isDeployed={false}
-                            deployedApiKeyDisplay={undefined}
-                          />
-                        </div>
-                      </>
+                  <div className='space-y-4'>
+                    {apiDeployError && (
+                      <div className='rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive text-sm'>
+                        <div className='font-semibold'>API Deployment Error</div>
+                        <div>{apiDeployError}</div>
+                      </div>
                     )}
-                  </>
+
+                    {versionToActivate !== null ? (
+                      <div className='space-y-4'>
+                        <div className='rounded-md border bg-muted/40 p-4 text-muted-foreground text-sm'>
+                          {`Deploy version ${
+                            versions.find((v) => v.version === versionToActivate)?.name ||
+                            `v${versionToActivate}`
+                          } to production.`}
+                        </div>
+                        <div className='flex gap-2'>
+                          <Button
+                            onClick={onDeploy}
+                            disabled={isSubmitting}
+                            className={cn(
+                              'gap-2 font-medium',
+                              'bg-[var(--brand-primary-hover-hex)] hover:bg-[var(--brand-primary-hover-hex)]',
+                              'shadow-[0_0_0_0_var(--brand-primary-hover-hex)] hover:shadow-[0_0_0_4px_rgba(127,47,255,0.15)]',
+                              'text-white transition-all duration-200',
+                              'disabled:opacity-50 disabled:hover:bg-[var(--brand-primary-hover-hex)] disabled:hover:shadow-none'
+                            )}
+                          >
+                            {isSubmitting ? (
+                              <>
+                                <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />
+                                Deploying...
+                              </>
+                            ) : (
+                              'Deploy version'
+                            )}
+                          </Button>
+                          <Button variant='outline' onClick={() => setVersionToActivate(null)}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <DeploymentInfo
+                        isLoading={isLoading}
+                        deploymentInfo={
+                          deploymentInfo ? { ...deploymentInfo, needsRedeployment } : null
+                        }
+                        onRedeploy={handleRedeploy}
+                        onUndeploy={handleUndeploy}
+                        isSubmitting={isSubmitting}
+                        isUndeploying={isUndeploying}
+                        workflowId={workflowId}
+                        deployedState={deployedState}
+                        isLoadingDeployedState={isLoadingDeployedState}
+                        getInputFormatExample={getInputFormatExample}
+                        selectedStreamingOutputs={selectedStreamingOutputs}
+                        onSelectedStreamingOutputsChange={setSelectedStreamingOutputs}
+                      />
+                    )}
+                  </div>
                 )}
 
                 {activeTab === 'versions' && (
@@ -915,56 +957,26 @@ export function DeployModal({
                 )}
 
                 {activeTab === 'chat' && (
-                  <>
-                    <ChatDeploy
-                      workflowId={workflowId || ''}
-                      deploymentInfo={deploymentInfo}
-                      onChatExistsChange={setChatExists}
-                      chatSubmitting={chatSubmitting}
-                      setChatSubmitting={setChatSubmitting}
-                      onValidationChange={setIsChatFormValid}
-                      onDeploymentComplete={handleCloseModal}
-                      onDeployed={handlePostDeploymentUpdate}
-                      onUndeploy={handleUndeploy}
-                      onVersionActivated={() => setVersionToActivate(null)}
-                    />
-                  </>
+                  <ChatDeploy
+                    workflowId={workflowId || ''}
+                    deploymentInfo={deploymentInfo}
+                    onChatExistsChange={setChatExists}
+                    chatSubmitting={chatSubmitting}
+                    setChatSubmitting={setChatSubmitting}
+                    onValidationChange={setIsChatFormValid}
+                    onDeploymentComplete={handleCloseModal}
+                    onDeployed={handlePostDeploymentUpdate}
+                    onUndeploy={handleUndeploy}
+                    onVersionActivated={() => setVersionToActivate(null)}
+                  />
+                )}
+
+                {activeTab === 'template' && workflowId && (
+                  <TemplateDeploy workflowId={workflowId} onDeploymentComplete={handleCloseModal} />
                 )}
               </div>
             </div>
           </div>
-
-          {activeTab === 'api' && (versionToActivate !== null || !isDeployed) && (
-            <div className='flex flex-shrink-0 justify-between border-t px-6 py-4'>
-              <Button variant='outline' onClick={handleCloseModal}>
-                Cancel
-              </Button>
-
-              <Button
-                type='submit'
-                form='deploy-api-form'
-                disabled={isSubmitting || !apiKeys.length}
-                className={cn(
-                  'gap-2 font-medium',
-                  'bg-[var(--brand-primary-hover-hex)] hover:bg-[var(--brand-primary-hover-hex)]',
-                  'shadow-[0_0_0_0_var(--brand-primary-hover-hex)] hover:shadow-[0_0_0_4px_rgba(127,47,255,0.15)]',
-                  'text-white transition-all duration-200',
-                  'disabled:opacity-50 disabled:hover:bg-[var(--brand-primary-hover-hex)] disabled:hover:shadow-none'
-                )}
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />
-                    Deploying...
-                  </>
-                ) : versionToActivate !== null ? (
-                  `Deploy ${versions.find((v) => v.version === versionToActivate)?.name || `v${versionToActivate}`}`
-                ) : (
-                  'Deploy API'
-                )}
-              </Button>
-            </div>
-          )}
 
           {activeTab === 'chat' && (
             <div className='flex flex-shrink-0 justify-between border-t px-6 py-4'>

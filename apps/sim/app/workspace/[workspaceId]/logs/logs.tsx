@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Info, Loader2 } from 'lucide-react'
+import { AlertCircle, ArrowUpRight, Info, Loader2 } from 'lucide-react'
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { createLogger } from '@/lib/logs/console/logger'
 import { parseQuery, queryToApiParams } from '@/lib/logs/query-parser'
@@ -19,6 +20,12 @@ import type { LogsResponse, WorkflowLog } from '@/stores/logs/filters/types'
 const logger = createLogger('Logs')
 const LOGS_PER_PAGE = 50
 
+/**
+ * Returns the background color for a trigger type badge.
+ *
+ * @param trigger - The trigger type (manual, schedule, webhook, chat, api)
+ * @returns Hex color code for the trigger type
+ */
 const getTriggerColor = (trigger: string | null | undefined): string => {
   if (!trigger) return '#9ca3af'
 
@@ -684,14 +691,14 @@ export default function Logs() {
   }
 
   return (
-    <div className='flex h-full min-w-0 flex-col pl-64'>
+    <div className='fixed inset-0 left-[256px] flex min-w-0 flex-col'>
       {/* Add the animation styles */}
       <style jsx global>
         {selectedRowAnimation}
       </style>
 
       <div className='flex min-w-0 flex-1 overflow-hidden'>
-        <div className='flex flex-1 flex-col overflow-auto p-6'>
+        <div className='flex flex-1 flex-col p-[24px]'>
           <Controls
             isRefetching={isRefreshing}
             resetToNow={handleRefresh}
@@ -716,86 +723,85 @@ export default function Logs() {
           />
 
           {/* Table container */}
-          <div className='flex flex-1 flex-col overflow-hidden'>
-            {/* Table with responsive layout */}
-            <div className='w-full overflow-x-auto'>
-              {/* Header */}
-              <div>
-                <div className='border-border border-b'>
-                  <div className='grid min-w-[600px] grid-cols-[120px_80px_120px_120px] gap-2 px-2 pb-3 md:grid-cols-[140px_90px_140px_120px] md:gap-3 lg:min-w-0 lg:grid-cols-[160px_100px_160px_120px] lg:gap-4 xl:grid-cols-[160px_100px_160px_120px_120px_100px]'>
-                    <div className='font-[480] font-sans text-[13px] text-muted-foreground leading-normal'>
-                      Time
-                    </div>
-                    <div className='font-[480] font-sans text-[13px] text-muted-foreground leading-normal'>
-                      Status
-                    </div>
-                    <div className='font-[480] font-sans text-[13px] text-muted-foreground leading-normal'>
-                      Workflow
-                    </div>
-                    <div className='font-[480] font-sans text-[13px] text-muted-foreground leading-normal'>
-                      Cost
-                    </div>
-                    <div className='hidden font-[480] font-sans text-[13px] text-muted-foreground leading-normal xl:block'>
-                      Trigger
-                    </div>
+          <div className='flex flex-1 flex-col overflow-hidden rounded-[8px] border dark:border-[var(--border)]'>
+            {/* Header */}
+            <div className='flex-shrink-0 border-b bg-[var(--surface-1)] dark:border-[var(--border)] dark:bg-[var(--surface-1)]'>
+              <div className='grid min-w-[600px] grid-cols-[120px_80px_120px_120px] gap-[8px] px-[24px] py-[12px] md:grid-cols-[140px_90px_140px_120px] md:gap-[12px] lg:min-w-0 lg:grid-cols-[160px_100px_160px_120px] lg:gap-[16px] xl:grid-cols-[160px_100px_160px_120px_120px_100px]'>
+                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
+                  Time
+                </div>
+                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
+                  Status
+                </div>
+                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
+                  Workflow
+                </div>
+                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
+                  Cost
+                </div>
+                <div className='hidden font-medium text-[13px] text-[var(--text-tertiary)] xl:block dark:text-[var(--text-tertiary)]'>
+                  Trigger
+                </div>
 
-                    <div className='hidden font-[480] font-sans text-[13px] text-muted-foreground leading-normal xl:block'>
-                      Duration
-                    </div>
-                  </div>
+                <div className='hidden font-medium text-[13px] text-[var(--text-tertiary)] xl:block dark:text-[var(--text-tertiary)]'>
+                  Duration
                 </div>
               </div>
             </div>
 
             {/* Table body - scrollable */}
-            <div className='flex-1 overflow-auto' ref={scrollContainerRef}>
+            <div className='flex-1 overflow-y-auto overflow-x-hidden' ref={scrollContainerRef}>
               {loading && page === 1 ? (
                 <div className='flex h-full items-center justify-center'>
-                  <div className='flex items-center gap-2 text-muted-foreground'>
-                    <Loader2 className='h-5 w-5 animate-spin' />
-                    <span className='text-sm'>Loading logs...</span>
+                  <div className='flex items-center gap-[8px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
+                    <Loader2 className='h-[16px] w-[16px] animate-spin' />
+                    <span className='text-[13px]'>Loading logs...</span>
                   </div>
                 </div>
               ) : error ? (
                 <div className='flex h-full items-center justify-center'>
-                  <div className='flex items-center gap-2 text-destructive'>
-                    <AlertCircle className='h-5 w-5' />
-                    <span className='text-sm'>Error: {error}</span>
+                  <div className='flex items-center gap-[8px] text-[var(--text-error)] dark:text-[var(--text-error)]'>
+                    <AlertCircle className='h-[16px] w-[16px]' />
+                    <span className='text-[13px]'>Error: {error}</span>
                   </div>
                 </div>
               ) : logs.length === 0 ? (
                 <div className='flex h-full items-center justify-center'>
-                  <div className='flex items-center gap-2 text-muted-foreground'>
-                    <Info className='h-5 w-5' />
-                    <span className='text-sm'>No logs found</span>
+                  <div className='flex items-center gap-[8px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
+                    <Info className='h-[16px] w-[16px]' />
+                    <span className='text-[13px]'>No logs found</span>
                   </div>
                 </div>
               ) : (
-                <div className='pb-4'>
+                <div className='pb-[16px]'>
                   {logs.map((log) => {
                     const formattedDate = formatDate(log.createdAt)
                     const isSelected = selectedLog?.id === log.id
+                    const baseLevel = (log.level || 'info').toLowerCase()
+                    const isError = baseLevel === 'error'
+                    // If it's an error, don't treat it as pending even if hasPendingPause is true
+                    const isPending = !isError && log.hasPendingPause === true
+                    const statusLabel = isPending
+                      ? 'Pending'
+                      : `${baseLevel.charAt(0).toUpperCase()}${baseLevel.slice(1)}`
 
                     return (
                       <div
                         key={log.id}
                         ref={isSelected ? selectedRowRef : null}
-                        className={`cursor-pointer border-border border-b transition-all duration-200 ${
-                          isSelected ? 'bg-accent/40' : 'hover:bg-accent/20'
+                        className={`cursor-pointer border-b transition-all duration-200 dark:border-[var(--border)] ${
+                          isSelected ? 'bg-[var(--border)]' : 'hover:bg-[var(--border)]'
                         }`}
                         onClick={() => handleLogClick(log)}
                       >
-                        <div className='grid min-w-[600px] grid-cols-[120px_80px_120px_120px] items-center gap-2 px-2 py-4 md:grid-cols-[140px_90px_140px_120px] md:gap-3 lg:min-w-0 lg:grid-cols-[160px_100px_160px_120px] lg:gap-4 xl:grid-cols-[160px_100px_160px_120px_120px_100px]'>
+                        <div className='grid min-w-[600px] grid-cols-[120px_80px_120px_120px_40px] items-center gap-[8px] px-[24px] py-[12px] md:grid-cols-[140px_90px_140px_120px_40px] md:gap-[12px] lg:min-w-0 lg:grid-cols-[160px_100px_160px_120px_40px] lg:gap-[16px] xl:grid-cols-[160px_100px_160px_120px_120px_100px_40px]'>
                           {/* Time */}
                           <div>
                             <div className='text-[13px]'>
-                              <span className='font-sm text-muted-foreground'>
+                              <span className='text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
                                 {formattedDate.compactDate}
                               </span>
-                              <span
-                                style={{ marginLeft: '8px' }}
-                                className='hidden font-medium sm:inline'
-                              >
+                              <span className='ml-[8px] hidden font-medium sm:inline'>
                                 {formattedDate.compactTime}
                               </span>
                             </div>
@@ -803,28 +809,45 @@ export default function Logs() {
 
                           {/* Status */}
                           <div>
-                            <div
-                              className={cn(
-                                'inline-flex items-center rounded-[8px] px-[6px] py-[2px] font-medium text-xs transition-all duration-200 lg:px-[8px]',
-                                log.level === 'error'
-                                  ? 'bg-red-500 text-white'
-                                  : 'bg-secondary text-card-foreground'
-                              )}
-                            >
-                              {log.level}
-                            </div>
+                            {isError || !isPending ? (
+                              <div
+                                className={cn(
+                                  'flex h-[24px] w-[56px] items-center justify-start rounded-[6px] border pl-[9px]',
+                                  isError
+                                    ? 'gap-[5px] border-[#883827] bg-[#491515]'
+                                    : 'gap-[8px] border-[#686868] bg-[#383838]'
+                                )}
+                              >
+                                <div
+                                  className='h-[6px] w-[6px] rounded-[2px]'
+                                  style={{
+                                    backgroundColor: isError ? '#EF4444' : '#B7B7B7',
+                                  }}
+                                />
+                                <span
+                                  className='font-medium text-[11.5px]'
+                                  style={{ color: isError ? '#EF4444' : '#B7B7B7' }}
+                                >
+                                  {statusLabel}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className='inline-flex items-center bg-amber-300 px-[8px] py-[2px] font-medium text-[12px] text-amber-900 dark:bg-amber-500/90 dark:text-black'>
+                                {statusLabel}
+                              </div>
+                            )}
                           </div>
 
                           {/* Workflow */}
                           <div className='min-w-0'>
-                            <div className='truncate font-medium text-[13px]'>
+                            <div className='truncate font-medium text-[13px] text-[var(--text-primary)] dark:text-[var(--text-primary)]'>
                               {log.workflow?.name || 'Unknown Workflow'}
                             </div>
                           </div>
 
                           {/* Cost */}
                           <div>
-                            <div className='font-medium text-muted-foreground text-xs'>
+                            <div className='font-medium text-[12px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
                               {typeof (log as any)?.cost?.total === 'number'
                                 ? `$${((log as any).cost.total as number).toFixed(4)}`
                                 : '—'}
@@ -835,30 +858,40 @@ export default function Logs() {
                           <div className='hidden xl:block'>
                             {log.trigger ? (
                               <div
-                                className={cn(
-                                  'inline-flex items-center rounded-[8px] px-[6px] py-[2px] font-medium text-xs transition-all duration-200 lg:px-[8px]',
-                                  log.trigger.toLowerCase() === 'manual'
-                                    ? 'bg-secondary text-card-foreground'
-                                    : 'text-white'
-                                )}
-                                style={
-                                  log.trigger.toLowerCase() === 'manual'
-                                    ? undefined
-                                    : { backgroundColor: getTriggerColor(log.trigger) }
-                                }
+                                className='inline-flex items-center rounded-[6px] px-[8px] py-[2px] font-medium text-[12px] text-white'
+                                style={{ backgroundColor: getTriggerColor(log.trigger) }}
                               >
                                 {log.trigger}
                               </div>
                             ) : (
-                              <div className='text-muted-foreground text-xs'>—</div>
+                              <div className='font-medium text-[12px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
+                                —
+                              </div>
                             )}
                           </div>
 
                           {/* Duration */}
                           <div className='hidden xl:block'>
-                            <div className='text-muted-foreground text-xs'>
+                            <div className='font-medium text-[12px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
                               {log.duration || '—'}
                             </div>
+                          </div>
+
+                          {/* Resume Link */}
+                          <div className='flex justify-end'>
+                            {isPending &&
+                            log.executionId &&
+                            (log.workflow?.id || log.workflowId) ? (
+                              <Link
+                                href={`/resume/${log.workflow?.id || log.workflowId}/${log.executionId}`}
+                                className='inline-flex h-[28px] w-[28px] items-center justify-center rounded-[8px] border border-primary/60 border-dashed text-primary hover:bg-primary/10'
+                                aria-label='Open resume console'
+                              >
+                                <ArrowUpRight className='h-[14px] w-[14px]' />
+                              </Link>
+                            ) : (
+                              <span className='h-[28px] w-[28px]' />
+                            )}
                           </div>
                         </div>
                       </div>
@@ -867,18 +900,18 @@ export default function Logs() {
 
                   {/* Infinite scroll loader */}
                   {hasMore && (
-                    <div className='flex items-center justify-center py-4'>
+                    <div className='flex items-center justify-center py-[16px]'>
                       <div
                         ref={loaderRef}
-                        className='flex items-center gap-2 text-muted-foreground'
+                        className='flex items-center gap-[8px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'
                       >
                         {isFetchingMore ? (
                           <>
-                            <Loader2 className='h-4 w-4 animate-spin' />
-                            <span className='text-sm'>Loading more...</span>
+                            <Loader2 className='h-[16px] w-[16px] animate-spin' />
+                            <span className='text-[13px]'>Loading more...</span>
                           </>
                         ) : (
-                          <span className='text-sm'>Scroll to load more</span>
+                          <span className='text-[13px]'>Scroll to load more</span>
                         )}
                       </div>
                     </div>

@@ -209,12 +209,33 @@ const nextConfig: NextConfig = {
   async redirects() {
     const redirects = []
 
-    // Redirect /building to /blog (legacy URL support)
-    redirects.push({
-      source: '/building/:path*',
-      destination: '/blog/:path*',
-      permanent: true,
-    })
+    // Redirect /building and /blog to /studio (legacy URL support)
+    redirects.push(
+      {
+        source: '/building/:path*',
+        destination: 'https://sim.ai/studio/:path*',
+        permanent: true,
+      },
+      {
+        source: '/blog/:path*',
+        destination: 'https://sim.ai/studio/:path*',
+        permanent: true,
+      }
+    )
+
+    // Move root feeds to studio namespace
+    redirects.push(
+      {
+        source: '/rss.xml',
+        destination: '/studio/rss.xml',
+        permanent: true,
+      },
+      {
+        source: '/sitemap-images.xml',
+        destination: '/studio/sitemap-images.xml',
+        permanent: true,
+      }
+    )
 
     // Only enable domain redirects for the hosted version
     if (isHosted) {

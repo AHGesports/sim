@@ -2,10 +2,8 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { checkHybridAuth } from '@/lib/auth/hybrid'
 import { createLogger } from '@/lib/logs/console/logger'
-import {
-  downloadFileFromStorage,
-  processFilesToUserFiles,
-} from '@/lib/uploads/utils/file-processing'
+import { processFilesToUserFiles } from '@/lib/uploads/utils/file-utils'
+import { downloadFileFromStorage } from '@/lib/uploads/utils/file-utils.server'
 import { generateRequestId } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
@@ -16,6 +14,7 @@ const SlackSendMessageSchema = z.object({
   accessToken: z.string().min(1, 'Access token is required'),
   channel: z.string().min(1, 'Channel is required'),
   text: z.string().min(1, 'Message text is required'),
+  thread_ts: z.string().optional().nullable(),
   files: z.array(z.any()).optional().nullable(),
 })
 
@@ -61,6 +60,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           channel: validatedData.channel,
           text: validatedData.text,
+          ...(validatedData.thread_ts && { thread_ts: validatedData.thread_ts }),
         }),
       })
 
@@ -102,6 +102,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           channel: validatedData.channel,
           text: validatedData.text,
+          ...(validatedData.thread_ts && { thread_ts: validatedData.thread_ts }),
         }),
       })
 
@@ -168,6 +169,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           channel: validatedData.channel,
           text: validatedData.text,
+          ...(validatedData.thread_ts && { thread_ts: validatedData.thread_ts }),
         }),
       })
 
