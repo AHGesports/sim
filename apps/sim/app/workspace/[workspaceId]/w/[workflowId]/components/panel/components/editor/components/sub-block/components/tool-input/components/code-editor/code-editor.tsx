@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import 'prismjs/components/prism-json'
 import { Wand2 } from 'lucide-react'
 import Editor from 'react-simple-code-editor'
@@ -17,6 +17,7 @@ import {
   createEnvVarPattern,
   createWorkflowVariablePattern,
 } from '@/executor/utils/reference-validation'
+import { useTextHistoryStore } from '@/stores/text-history'
 
 interface CodeEditorProps {
   value: string
@@ -33,6 +34,11 @@ interface CodeEditorProps {
   showWandButton?: boolean
   onWandClick?: () => void
   wandButtonDisabled?: boolean
+  /**
+   * Unique identifier for text history. When provided, enables undo/redo functionality.
+   * Format: "blockId:fieldName" e.g. "block-123:schema" or "block-123:code"
+   */
+  historyId?: string
 }
 
 export function CodeEditor({
@@ -50,15 +56,124 @@ export function CodeEditor({
   showWandButton = false,
   onWandClick,
   wandButtonDisabled = false,
+  historyId,
 }: CodeEditorProps) {
   const [code, setCode] = useState(value)
   const [visualLineHeights, setVisualLineHeights] = useState<number[]>([])
 
   const editorRef = useRef<HTMLDivElement>(null)
+  const lastInternalValueRef = useRef<string>(value)
+  const initializedRef = useRef(false)
 
+  // Text history store for undo/redo
+  const textHistoryStore = useTextHistoryStore()
+
+  // Parse historyId into blockId and subBlockId for the store
+  const [historyBlockId, historySubBlockId] = historyId?.split(':') ?? ['', '']
+  const hasHistory = Boolean(historyId && historyBlockId && historySubBlockId)
+
+  // Initialize history on mount
   useEffect(() => {
-    setCode(value)
+    if (hasHistory && !initializedRef.current) {
+      textHistoryStore.initHistory(historyBlockId, historySubBlockId, value)
+      initializedRef.current = true
+    }
+  }, [hasHistory, historyBlockId, historySubBlockId, value, textHistoryStore])
+
+  // Sync external value changes (but avoid resetting undo history for internal changes)
+  useEffect(() => {
+    if (value !== code && value !== lastInternalValueRef.current) {
+      setCode(value)
+      lastInternalValueRef.current = value
+    }
   }, [value])
+
+  // Handle value change with history tracking
+  const handleValueChange = useCallback(
+    (newCode: string) => {
+      setCode(newCode)
+      lastInternalValueRef.current = newCode
+      onChange(newCode)
+
+      // Record to history if enabled
+      if (hasHistory) {
+        textHistoryStore.recordChange(historyBlockId, historySubBlockId, newCode)
+      }
+    },
+    [onChange, hasHistory, historyBlockId, historySubBlockId, textHistoryStore]
+  )
+
+  // Handle undo
+  const handleUndo = useCallback(() => {
+    if (!hasHistory) return false
+
+    const previousValue = textHistoryStore.undo(historyBlockId, historySubBlockId)
+    if (previousValue !== null) {
+      setCode(previousValue)
+      lastInternalValueRef.current = previousValue
+      onChange(previousValue)
+      return true
+    }
+    return false
+  }, [hasHistory, historyBlockId, historySubBlockId, textHistoryStore, onChange])
+
+  // Handle redo
+  const handleRedo = useCallback(() => {
+    if (!hasHistory) return false
+
+    const nextValue = textHistoryStore.redo(historyBlockId, historySubBlockId)
+    if (nextValue !== null) {
+      setCode(nextValue)
+      lastInternalValueRef.current = nextValue
+      onChange(nextValue)
+      return true
+    }
+    return false
+  }, [hasHistory, historyBlockId, historySubBlockId, textHistoryStore, onChange])
+
+  // Handle keyboard events for undo/redo
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (disabled) return
+
+      const isMod = e.metaKey || e.ctrlKey
+
+      // Undo: Cmd+Z / Ctrl+Z
+      if (isMod && e.key === 'z' && !e.shiftKey && hasHistory) {
+        if (handleUndo()) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
+      }
+
+      // Redo: Cmd+Shift+Z / Ctrl+Shift+Z / Ctrl+Y
+      if (hasHistory) {
+        if (
+          (isMod && e.key === 'z' && e.shiftKey) ||
+          (isMod && e.key === 'Z') ||
+          (e.ctrlKey && e.key === 'y')
+        ) {
+          if (handleRedo()) {
+            e.preventDefault()
+            e.stopPropagation()
+            return
+          }
+        }
+      }
+
+      // Call parent's onKeyDown if provided
+      onKeyDown?.(e)
+    },
+    [disabled, hasHistory, handleUndo, handleRedo, onKeyDown]
+  )
+
+  // Handle blur - commit pending history
+  const handleBlur = useCallback(() => {
+    if (hasHistory) {
+      textHistoryStore.commitPending(historyBlockId, historySubBlockId)
+    }
+  }, [hasHistory, historyBlockId, historySubBlockId, textHistoryStore])
 
   useEffect(() => {
     if (!editorRef.current) return
@@ -211,11 +326,9 @@ export function CodeEditor({
 
         <Editor
           value={code}
-          onValueChange={(newCode) => {
-            setCode(newCode)
-            onChange(newCode)
-          }}
-          onKeyDown={onKeyDown}
+          onValueChange={handleValueChange}
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
           highlight={(code) => customHighlight(code)}
           disabled={disabled}
           {...getCodeEditorProps({ disabled })}

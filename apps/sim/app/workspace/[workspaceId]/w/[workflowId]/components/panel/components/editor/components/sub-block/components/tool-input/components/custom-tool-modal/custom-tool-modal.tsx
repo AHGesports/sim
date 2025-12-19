@@ -936,6 +936,7 @@ try {
                   gutterClassName='bg-[var(--bg)]'
                   disabled={schemaGeneration.isLoading || schemaGeneration.isStreaming}
                   onKeyDown={handleKeyDown}
+                  historyId={`${blockId}:tool-schema`}
                 />
               </ModalTabsContent>
 
@@ -1018,6 +1019,7 @@ try {
                     disabled={codeGeneration.isLoading || codeGeneration.isStreaming}
                     onKeyDown={handleKeyDown}
                     schemaParameters={schemaParameters}
+                    historyId={`${blockId}:tool-code`}
                   />
 
                   {showEnvVars && (

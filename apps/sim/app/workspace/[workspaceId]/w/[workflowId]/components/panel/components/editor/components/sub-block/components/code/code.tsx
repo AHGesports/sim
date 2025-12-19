@@ -37,6 +37,7 @@ import { useWand } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks/use-
 import type { GenerationType } from '@/blocks/types'
 import { createEnvVarPattern, createReferencePattern } from '@/executor/utils/reference-validation'
 import { useTagSelection } from '@/hooks/use-tag-selection'
+import { useTextHistory } from '@/hooks/use-text-history'
 import { normalizeBlockName } from '@/stores/workflows/utils'
 
 const logger = createLogger('Code')
@@ -305,6 +306,20 @@ export function Code({
     },
   })
 
+  // Text history for undo/redo with debouncing
+  const textHistory = useTextHistory({
+    blockId,
+    subBlockId,
+    value: code,
+    onChange: (newValue) => {
+      setCode(newValue)
+      if (!isPreview && !disabled) {
+        setStoreValue(newValue)
+      }
+    },
+    disabled: isPreview || disabled || readOnly || isAiStreaming,
+  })
+
   const getDefaultValueString = () => {
     if (defaultValue === undefined || defaultValue === null) return ''
     if (typeof defaultValue === 'string') return defaultValue
@@ -348,10 +363,12 @@ export function Code({
   useEffect(() => {
     handleStreamStartRef.current = () => {
       setCode('')
+      lastInternalValueRef.current = ''
     }
 
     handleGeneratedContentRef.current = (generatedCode: string) => {
       setCode(generatedCode)
+      lastInternalValueRef.current = generatedCode
       if (!isPreview && !disabled) {
         setStoreValue(generatedCode)
       }
@@ -387,14 +404,21 @@ export function Code({
     }
   }, [readOnly])
 
-  // Effects: Sync code with external value
+  // Ref to track the last value we set internally (to avoid sync loops)
+  const lastInternalValueRef = useRef<string>('')
+
+  // Effects: Sync code with external value (only for truly external changes)
   useEffect(() => {
     if (isAiStreaming) return
     const valueString = value?.toString() ?? ''
-    if (valueString !== code) {
+
+    // Only sync if this is a genuine external change, not our own update
+    // This prevents resetting the undo history when we update the store
+    if (valueString !== code && valueString !== lastInternalValueRef.current) {
       setCode(valueString)
+      lastInternalValueRef.current = valueString
     }
-  }, [value, code, isAiStreaming])
+  }, [value, isAiStreaming]) // Removed 'code' from dependencies to prevent sync loops
 
   // Effects: Track active line number for cursor position
   useEffect(() => {
@@ -502,8 +526,9 @@ export function Code({
       const dropPosition = textarea?.selectionStart ?? code.length
       const newValue = `${code.slice(0, dropPosition)}<${code.slice(dropPosition)}`
 
-      setCode(newValue)
-      setStoreValue(newValue)
+      // Use textHistory for proper undo tracking
+      textHistory.handleChange(newValue)
+      lastInternalValueRef.current = newValue
       const newCursorPosition = dropPosition + 1
       setCursorPosition(newCursorPosition)
 
@@ -531,7 +556,9 @@ export function Code({
    */
   const handleTagSelect = (newValue: string) => {
     if (!isPreview && !readOnly) {
-      setCode(newValue)
+      // Use textHistory for proper undo tracking
+      textHistory.handleChange(newValue)
+      lastInternalValueRef.current = newValue
       emitTagSelection(newValue)
     }
     setShowTags(false)
@@ -548,7 +575,9 @@ export function Code({
    */
   const handleEnvVarSelect = (newValue: string) => {
     if (!isPreview && !readOnly) {
-      setCode(newValue)
+      // Use textHistory for proper undo tracking
+      textHistory.handleChange(newValue)
+      lastInternalValueRef.current = newValue
       emitTagSelection(newValue)
     }
     setShowEnvVars(false)
@@ -741,8 +770,10 @@ export function Code({
             value={code}
             onValueChange={(newCode) => {
               if (!isAiStreaming && !isPreview && !disabled && !readOnly) {
-                setCode(newCode)
-                setStoreValue(newCode)
+                // Use textHistory for debounced undo/redo tracking
+                textHistory.handleChange(newCode)
+                // Track this as an internal change to prevent sync loops
+                lastInternalValueRef.current = newCode
 
                 const textarea = editorRef.current?.querySelector('textarea')
                 if (textarea) {
@@ -762,6 +793,10 @@ export function Code({
               }
             }}
             onKeyDown={(e) => {
+              // Let text history handle undo/redo first
+              if (textHistory.handleKeyDown(e)) {
+                return
+              }
               if (e.key === 'Escape') {
                 setShowTags(false)
                 setShowEnvVars(false)
@@ -769,6 +804,10 @@ export function Code({
               if (isAiStreaming) {
                 e.preventDefault()
               }
+            }}
+            onBlur={() => {
+              // Commit any pending text history changes on blur
+              textHistory.handleBlur()
             }}
             highlight={createHighlightFunction(effectiveLanguage, shouldHighlightReference)}
             {...getCodeEditorProps({ isStreaming: isAiStreaming, isPreview, disabled })}
