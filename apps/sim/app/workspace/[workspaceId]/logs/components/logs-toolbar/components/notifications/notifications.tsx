@@ -645,6 +645,32 @@ export function NotificationSettings({
 
   const renderForm = () => (
     <div className='flex h-full flex-col gap-[16px]'>
+      {/* Hidden decoy fields to prevent browser autofill */}
+      <input
+        type='text'
+        name='fakeusernameremembered'
+        autoComplete='username'
+        style={{ position: 'absolute', left: '-9999px', opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
+        readOnly
+      />
+      <input
+        type='password'
+        name='fakepasswordremembered'
+        autoComplete='current-password'
+        style={{ position: 'absolute', left: '-9999px', opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
+        readOnly
+      />
+      <input
+        type='email'
+        name='fakeemailremembered'
+        autoComplete='email'
+        style={{ position: 'absolute', left: '-9999px', opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
+        readOnly
+      />
+
       <div className='min-h-0 flex-1 overflow-y-auto'>
         {formErrors.general && (
           <div className='mb-[16px] rounded-[6px] border border-[var(--text-error)]/30 bg-[var(--text-error)]/10 p-[10px]'>
@@ -673,12 +699,18 @@ export function NotificationSettings({
                 <Label className='text-[var(--text-secondary)]'>Webhook URL</Label>
                 <EmcnInput
                   type='url'
+                  name='webhook_url_field'
                   placeholder='https://your-app.com/webhook'
                   value={formData.webhookUrl}
                   onChange={(e) => {
                     setFormData({ ...formData, webhookUrl: e.target.value })
                     setFormErrors({ ...formErrors, webhookUrl: '' })
                   }}
+                  autoComplete='off'
+                  autoCorrect='off'
+                  autoCapitalize='off'
+                  data-lpignore='true'
+                  data-form-type='other'
                 />
                 {formErrors.webhookUrl && (
                   <p className='text-[11px] text-[var(--text-error)]'>{formErrors.webhookUrl}</p>
@@ -688,9 +720,15 @@ export function NotificationSettings({
                 <Label className='text-[var(--text-secondary)]'>Secret (optional)</Label>
                 <EmcnInput
                   type='password'
+                  name='webhook_secret_field'
                   placeholder='Webhook secret for signature verification'
                   value={formData.webhookSecret}
                   onChange={(e) => setFormData({ ...formData, webhookSecret: e.target.value })}
+                  autoComplete='off'
+                  autoCorrect='off'
+                  autoCapitalize='off'
+                  data-lpignore='true'
+                  data-form-type='other'
                 />
               </div>
             </>
@@ -717,6 +755,7 @@ export function NotificationSettings({
                 ))}
                 <input
                   type='text'
+                  name='email_recipients_field'
                   value={emailInputValue}
                   onChange={(e) => setEmailInputValue(e.target.value)}
                   onKeyDown={handleEmailKeyDown}
@@ -727,6 +766,11 @@ export function NotificationSettings({
                       ? 'Add another email'
                       : 'Enter emails'
                   }
+                  autoComplete='off'
+                  autoCorrect='off'
+                  autoCapitalize='off'
+                  data-lpignore='true'
+                  data-form-type='other'
                   className='min-w-[180px] flex-1 border-none bg-transparent p-0 font-medium font-sans text-foreground text-sm outline-none placeholder:text-[var(--text-muted)] disabled:cursor-not-allowed disabled:opacity-50'
                 />
               </div>

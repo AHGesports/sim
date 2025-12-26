@@ -285,13 +285,28 @@ export class EdgeConstructor {
         const { source, target, sourceHandle, targetHandle } = connection
 
         if (target === parallelId) {
-          if (loopBlockIds.has(source) || parallelBlockIds.has(source)) continue
+          // Skip if source is another parallel (handled by wireParallelToParallelEdge from source's perspective)
+          if (parallelBlockIds.has(source)) continue
 
           if (nodes.includes(source)) {
             logger.warn('Invalid: parallel block connected from its own internal node', {
               parallelId,
               source,
             })
+            continue
+          }
+
+          // Handle loop → parallel connections
+          if (loopBlockIds.has(source)) {
+            this.wireLoopToParallelEdge(
+              source,
+              parallelId,
+              entryNodes,
+              branchCount,
+              dag,
+              sourceHandle,
+              targetHandle
+            )
             continue
           }
 
@@ -309,13 +324,41 @@ export class EdgeConstructor {
         }
 
         if (source === parallelId) {
-          if (loopBlockIds.has(target) || parallelBlockIds.has(target)) continue
-
           if (nodes.includes(target)) {
             logger.warn('Invalid: parallel block connected to its own internal node', {
               parallelId,
               target,
             })
+            continue
+          }
+
+          // Handle parallel-to-parallel connections
+          if (parallelBlockIds.has(target)) {
+            this.wireParallelToParallelEdge(
+              parallelId,
+              target,
+              terminalNodes,
+              branchCount,
+              dag,
+              sourceHandle,
+              targetHandle,
+              pauseTriggerMapping
+            )
+            continue
+          }
+
+          // Handle parallel → loop connections
+          if (loopBlockIds.has(target)) {
+            this.wireParallelToLoopEdge(
+              parallelId,
+              target,
+              terminalNodes,
+              branchCount,
+              dag,
+              sourceHandle,
+              targetHandle,
+              pauseTriggerMapping
+            )
             continue
           }
 
@@ -332,6 +375,162 @@ export class EdgeConstructor {
             }
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Wires edges from one parallel block's terminal nodes to another parallel block's entry nodes.
+   * This handles the case of consecutive parallel blocks (Parallel1 → Parallel2).
+   */
+  private wireParallelToParallelEdge(
+    sourceParallelId: string,
+    targetParallelId: string,
+    sourceTerminalNodes: string[],
+    sourceBranchCount: number,
+    dag: DAG,
+    sourceHandle?: string,
+    targetHandle?: string,
+    pauseTriggerMapping?: Map<string, string>
+  ): void {
+    const targetParallelConfig = dag.parallelConfigs.get(targetParallelId)
+
+    if (!targetParallelConfig) {
+      logger.warn('Target parallel config not found for parallel-to-parallel edge', {
+        sourceParallelId,
+        targetParallelId,
+      })
+      return
+    }
+
+    const targetNodes = targetParallelConfig.nodes
+
+    if (targetNodes.length === 0) {
+      logger.warn('Target parallel has no nodes', { targetParallelId })
+      return
+    }
+
+    // Find entry nodes and branch count for the target parallel
+    const { entryNodes: targetEntryNodes, branchCount: targetBranchCount } =
+      this.findParallelBoundaryNodes(targetNodes, targetParallelId, dag)
+
+    logger.info('Wiring parallel-to-parallel edge', {
+      sourceParallelId,
+      targetParallelId,
+      sourceTerminalNodes,
+      sourceBranchCount,
+      targetEntryNodes,
+      targetBranchCount,
+    })
+
+    // Wire from all terminal branches of source parallel to all entry branches of target parallel
+    for (const sourceTerminalNodeId of sourceTerminalNodes) {
+      for (let sourceBranchIdx = 0; sourceBranchIdx < sourceBranchCount; sourceBranchIdx++) {
+        const sourceBranchNodeId = buildBranchNodeId(sourceTerminalNodeId, sourceBranchIdx)
+
+        if (!dag.nodes.has(sourceBranchNodeId)) continue
+
+        const resolvedSourceId = pauseTriggerMapping?.get(sourceBranchNodeId) ?? sourceBranchNodeId
+
+        for (const targetEntryNodeId of targetEntryNodes) {
+          for (let targetBranchIdx = 0; targetBranchIdx < targetBranchCount; targetBranchIdx++) {
+            const targetBranchNodeId = buildBranchNodeId(targetEntryNodeId, targetBranchIdx)
+
+            if (dag.nodes.has(targetBranchNodeId)) {
+              this.addEdge(dag, resolvedSourceId, targetBranchNodeId, sourceHandle, targetHandle)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Wires edges from a loop block's sentinel end to a parallel block's entry nodes.
+   * This handles the case of Loop → Parallel connections.
+   */
+  private wireLoopToParallelEdge(
+    sourceLoopId: string,
+    targetParallelId: string,
+    targetEntryNodes: string[],
+    targetBranchCount: number,
+    dag: DAG,
+    sourceHandle?: string,
+    targetHandle?: string
+  ): void {
+    const sentinelEndId = buildSentinelEndId(sourceLoopId)
+
+    if (!dag.nodes.has(sentinelEndId)) {
+      logger.warn('Loop sentinel end not found for loop-to-parallel edge', {
+        sourceLoopId,
+        targetParallelId,
+        sentinelEndId,
+      })
+      return
+    }
+
+    logger.info('Wiring loop-to-parallel edge', {
+      sourceLoopId,
+      targetParallelId,
+      sentinelEndId,
+      targetEntryNodes,
+      targetBranchCount,
+    })
+
+    // Wire from loop's sentinel end to all entry branches of the parallel
+    for (const targetEntryNodeId of targetEntryNodes) {
+      for (let branchIdx = 0; branchIdx < targetBranchCount; branchIdx++) {
+        const targetBranchNodeId = buildBranchNodeId(targetEntryNodeId, branchIdx)
+
+        if (dag.nodes.has(targetBranchNodeId)) {
+          this.addEdge(dag, sentinelEndId, targetBranchNodeId, sourceHandle, targetHandle)
+        }
+      }
+    }
+  }
+
+  /**
+   * Wires edges from a parallel block's terminal nodes to a loop block's sentinel start.
+   * This handles the case of Parallel → Loop connections.
+   */
+  private wireParallelToLoopEdge(
+    sourceParallelId: string,
+    targetLoopId: string,
+    sourceTerminalNodes: string[],
+    sourceBranchCount: number,
+    dag: DAG,
+    sourceHandle?: string,
+    targetHandle?: string,
+    pauseTriggerMapping?: Map<string, string>
+  ): void {
+    const sentinelStartId = buildSentinelStartId(targetLoopId)
+
+    if (!dag.nodes.has(sentinelStartId)) {
+      logger.warn('Loop sentinel start not found for parallel-to-loop edge', {
+        sourceParallelId,
+        targetLoopId,
+        sentinelStartId,
+      })
+      return
+    }
+
+    logger.info('Wiring parallel-to-loop edge', {
+      sourceParallelId,
+      targetLoopId,
+      sourceTerminalNodes,
+      sourceBranchCount,
+      sentinelStartId,
+    })
+
+    // Wire from all terminal branches of the parallel to the loop's sentinel start
+    for (const sourceTerminalNodeId of sourceTerminalNodes) {
+      for (let branchIdx = 0; branchIdx < sourceBranchCount; branchIdx++) {
+        const sourceBranchNodeId = buildBranchNodeId(sourceTerminalNodeId, branchIdx)
+
+        if (!dag.nodes.has(sourceBranchNodeId)) continue
+
+        const resolvedSourceId = pauseTriggerMapping?.get(sourceBranchNodeId) ?? sourceBranchNodeId
+        this.addEdge(dag, resolvedSourceId, sentinelStartId, sourceHandle, targetHandle)
       }
     }
   }
