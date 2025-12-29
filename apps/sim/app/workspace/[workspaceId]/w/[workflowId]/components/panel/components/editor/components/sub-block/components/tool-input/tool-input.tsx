@@ -788,6 +788,7 @@ const BUILT_IN_TOOL_TYPES = new Set([
   'tts',
   'stt',
   'memory',
+  'webhook_request',
   'workflow',
 ])
 
@@ -916,6 +917,7 @@ export function ToolInput({
     (block) =>
       (block.category === 'tools' ||
         block.type === 'api' ||
+        block.type === 'webhook_request' ||
         block.type === 'workflow' ||
         block.type === 'knowledge' ||
         block.type === 'function') &&
