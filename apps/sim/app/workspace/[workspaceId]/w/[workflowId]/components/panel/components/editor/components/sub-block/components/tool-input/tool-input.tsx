@@ -775,6 +775,7 @@ function CodeEditorSyncWrapper({
  * in the tool selection dropdown.
  */
 const BUILT_IN_TOOL_TYPES = new Set([
+  'api',
   'file',
   'function',
   'knowledge',
@@ -914,6 +915,7 @@ export function ToolInput({
   const toolBlocks = getAllBlocks().filter(
     (block) =>
       (block.category === 'tools' ||
+        block.type === 'api' ||
         block.type === 'workflow' ||
         block.type === 'knowledge' ||
         block.type === 'function') &&
