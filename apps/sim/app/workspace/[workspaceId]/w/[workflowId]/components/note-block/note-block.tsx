@@ -126,11 +126,10 @@ const NoteMarkdown = memo(function NoteMarkdown({ content }: { content: string }
                   <iframe
                     src={`https://www.youtube.com/embed/${videoId}`}
                     title='YouTube video'
-                    allow='accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share'
+                    allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
                     allowFullScreen
                     loading='lazy'
                     referrerPolicy='strict-origin-when-cross-origin'
-                    sandbox='allow-scripts allow-same-origin allow-presentation allow-popups'
                     className='aspect-video w-full'
                   />
                 </span>
