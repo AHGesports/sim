@@ -1,5 +1,5 @@
+import { createLogger } from '@sim/logger'
 import { WorkflowIcon } from '@/components/icons'
-import { createLogger } from '@/lib/logs/console/logger'
 import type { BlockConfig } from '@/blocks/types'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 
@@ -38,8 +38,9 @@ export const WorkflowBlock: BlockConfig = {
     {
       id: 'workflowId',
       title: 'Select Workflow',
-      type: 'dropdown',
+      type: 'combobox',
       options: getAvailableWorkflows,
+      placeholder: 'Search workflows...',
       required: true,
     },
     {
