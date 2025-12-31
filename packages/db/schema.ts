@@ -1735,3 +1735,64 @@ export const usageLog = pgTable(
     workflowIdIdx: index('usage_log_workflow_id_idx').on(table.workflowId),
   })
 )
+
+// Browser profile provider type enum
+export const browserProfileProviderTypeEnum = pgEnum('browser_profile_provider_type', [
+  'own_browser',
+  'more_login',
+])
+
+// Profile scope enum - determines if profile is global (user-level) or workspace-specific
+export const profileScopeEnum = pgEnum('profile_scope', ['global', 'workspace'])
+
+// Browser profile table - stores anti-detection browser configurations
+export const browserProfile = pgTable(
+  'browser_profile',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    providerType: browserProfileProviderTypeEnum('provider_type').notNull(),
+    providerConfig: jsonb('provider_config').default('{}'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('browser_profile_user_id_idx').on(table.userId),
+    providerTypeIdx: index('browser_profile_provider_type_idx').on(table.providerType),
+  })
+)
+
+// Agent profile table - stores agent profiles with global or workspace scope
+export const agentProfile = pgTable(
+  'agent_profile',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    // NULL for global profiles, set for workspace profiles
+    workspaceId: text('workspace_id').references(() => workspace.id, { onDelete: 'cascade' }),
+    scope: profileScopeEnum('scope').notNull(),
+    browserProfileId: text('browser_profile_id').references(() => browserProfile.id, {
+      onDelete: 'set null',
+    }),
+    name: text('name').notNull(),
+    profileData: jsonb('profile_data').default('{}'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('agent_profile_user_id_idx').on(table.userId),
+    workspaceIdIdx: index('agent_profile_workspace_id_idx').on(table.workspaceId),
+    scopeIdx: index('agent_profile_scope_idx').on(table.scope),
+    browserProfileIdIdx: index('agent_profile_browser_profile_id_idx').on(table.browserProfileId),
+    userScopeIdx: index('agent_profile_user_scope_idx').on(table.userId, table.scope),
+    // Constraint: workspace profiles must have workspaceId, global profiles must not
+    scopeWorkspaceCheck: check(
+      'scope_workspace_check',
+      sql`(scope = 'global' AND workspace_id IS NULL) OR (scope = 'workspace' AND workspace_id IS NOT NULL)`
+    ),
+  })
+)

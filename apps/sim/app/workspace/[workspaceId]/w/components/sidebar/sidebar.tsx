@@ -13,6 +13,7 @@ import { useUserPermissionsContext } from '@/app/workspace/[workspaceId]/provide
 import { createCommands } from '@/app/workspace/[workspaceId]/utils/commands-utils'
 import {
   HelpModal,
+  ProfileSection,
   SearchModal,
   SettingsModal,
   UsageIndicator,
@@ -506,6 +507,11 @@ export function Sidebar() {
                   </p>
                 </div>
                 <p className='font-medium text-[var(--text-subtle)] text-small'>⌘K</p>
+              </div>
+
+              {/* Profiles Section */}
+              <div className='mt-[14px] flex-shrink-0 px-[14px]'>
+                <ProfileSection workspaceId={workspaceId} />
               </div>
 
               {/* Workflows */}

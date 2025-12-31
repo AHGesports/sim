@@ -1,4 +1,5 @@
 export { HelpModal } from './help-modal/help-modal'
+export { ProfileSection } from './profile-section'
 export { SearchModal } from './search-modal/search-modal'
 export { SettingsModal } from './settings-modal/settings-modal'
 export { UsageIndicator } from './usage-indicator/usage-indicator'

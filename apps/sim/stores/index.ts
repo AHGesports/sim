@@ -6,6 +6,7 @@ import { useCustomToolsStore } from '@/stores/custom-tools/store'
 import { useExecutionStore } from '@/stores/execution/store'
 import { useCopilotStore } from '@/stores/panel/copilot/store'
 import { useVariablesStore } from '@/stores/panel/variables/store'
+import { useProfileStore } from '@/stores/profiles/store'
 import { useEnvironmentStore } from '@/stores/settings/environment/store'
 import { useTerminalConsoleStore } from '@/stores/terminal'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
@@ -199,6 +200,7 @@ export {
   useCustomToolsStore,
   useVariablesStore,
   useSubBlockStore,
+  useProfileStore,
 }
 
 // Helper function to reset all stores
@@ -224,6 +226,7 @@ export const resetAllStores = () => {
   useTerminalConsoleStore.setState({ entries: [], isOpen: false })
   useCopilotStore.setState({ messages: [], isSendingMessage: false, error: null })
   useCustomToolsStore.getState().reset()
+  useProfileStore.getState().reset()
   // Variables store has no tracking to reset; registry hydrates
 }
 
@@ -239,6 +242,7 @@ export const logAllStores = () => {
     customTools: useCustomToolsStore.getState(),
     subBlock: useSubBlockStore.getState(),
     variables: useVariablesStore.getState(),
+    profiles: useProfileStore.getState(),
   }
 
   return state
