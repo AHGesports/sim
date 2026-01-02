@@ -1,10 +1,11 @@
 'use client'
 
 import { useCallback } from 'react'
-import { Check, Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { Button, Tooltip } from '@/components/emcn'
+import { Checkbox } from '@/components/ui/checkbox'
+import { cn } from '@/lib/core/utils/cn'
 import type { AgentProfile } from '@/lib/profiles/types'
-import { cn } from '@/lib/utils'
 
 interface ProfileItemProps {
   profile: AgentProfile
@@ -27,9 +28,8 @@ export function ProfileItem({
   onDelete,
 }: ProfileItemProps) {
   const handleToggle = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      if (!isExecuting) {
+    (checked: boolean | 'indeterminate') => {
+      if (!isExecuting && checked !== 'indeterminate') {
         onToggle()
       }
     },
@@ -59,23 +59,17 @@ export function ProfileItem({
         'hover:bg-[var(--surface-6)] dark:hover:bg-[var(--surface-5)]'
       )}
     >
-      {/* Toggle Button */}
+      {/* Toggle Checkbox */}
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <button
-            type='button'
-            className={cn(
-              'flex h-[14px] w-[14px] flex-shrink-0 items-center justify-center rounded-[4px] transition-colors',
-              isActivated
-                ? 'bg-[var(--accent)] text-white'
-                : 'border border-[var(--border)] bg-transparent',
-              isExecuting && 'cursor-not-allowed opacity-50'
-            )}
-            onClick={handleToggle}
-            disabled={isExecuting}
-          >
-            {isActivated && <Check className='h-[10px] w-[10px]' />}
-          </button>
+          <div className='flex-shrink-0'>
+            <Checkbox
+              checked={isActivated}
+              onCheckedChange={handleToggle}
+              disabled={isExecuting}
+              className='h-[14px] w-[14px]'
+            />
+          </div>
         </Tooltip.Trigger>
         <Tooltip.Content className='py-[2.5px]'>
           <p>

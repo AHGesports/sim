@@ -18,7 +18,7 @@ interface ProfileSectionProps {
 
 /**
  * Main profile section container displayed in the sidebar.
- * Contains two collapsible sections: "My Profiles" (global) and "Workspace Profiles".
+ * Contains two collapsible sections: "Global Agents" and "Workspace Agents".
  */
 export function ProfileSection({ workspaceId }: ProfileSectionProps) {
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -122,12 +122,12 @@ export function ProfileSection({ workspaceId }: ProfileSectionProps) {
         </div>
       </div>
 
-      {/* My Profiles (Global) */}
+      {/* Global Agents */}
       <CollapsibleSection
-        title='My Profiles'
-        storageKey='my-profiles'
+        title='Global Agents'
+        storageKey='global-agents'
         onAdd={() => handleOpenCreateModal(ProfileScope.Global)}
-        addTooltip='Create personal profile'
+        addTooltip='Create global agent'
       >
         {isLoading ? (
           <div className='px-[6px] py-[8px] text-center font-medium text-[var(--text-subtle)] text-small'>
@@ -144,12 +144,12 @@ export function ProfileSection({ workspaceId }: ProfileSectionProps) {
         )}
       </CollapsibleSection>
 
-      {/* Workspace Profiles */}
+      {/* Workspace Agents */}
       <CollapsibleSection
-        title='Workspace Profiles'
-        storageKey='workspace-profiles'
+        title='Workspace Agents'
+        storageKey='workspace-agents'
         onAdd={() => handleOpenCreateModal(ProfileScope.Workspace)}
-        addTooltip='Create workspace profile'
+        addTooltip='Create workspace agent'
       >
         {isLoading ? (
           <div className='px-[6px] py-[8px] text-center font-medium text-[var(--text-subtle)] text-small'>

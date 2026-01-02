@@ -3,8 +3,8 @@
 import { useCallback } from 'react'
 import { Chrome, Globe } from 'lucide-react'
 import { Button } from '@/components/emcn'
+import { cn } from '@/lib/core/utils/cn'
 import { BrowserProfileProvider } from '@/lib/profiles/types'
-import { cn } from '@/lib/utils'
 
 interface ProviderStepProps {
   selectedProvider: BrowserProfileProvider | null

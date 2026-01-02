@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/emcn'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { type AgentProfile, BrowserProfileProvider, ProfileScope } from '@/lib/profiles/types'
 import { useCreateProfile, useUpdateProfile } from '@/hooks/queries/profiles'
 import { DetailsStep, OverviewStep, ProviderStep } from './steps'
@@ -139,7 +139,7 @@ export function ProfileModal({
     if (isEditing) {
       return 'Edit Profile'
     }
-    return scope === ProfileScope.Global ? 'Create My Profile' : 'Create Workspace Profile'
+    return scope === ProfileScope.Global ? 'Create Global Agent' : 'Create Workspace Agent'
   }
 
   return (
@@ -177,6 +177,7 @@ export function ProfileModal({
               onBack={handleOverviewBack}
               onConfirm={handleConfirm}
               isSubmitting={isSubmitting}
+              isEditing={isEditing}
             />
           )}
         </div>

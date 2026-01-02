@@ -11,6 +11,7 @@ interface OverviewStepProps {
   onBack: () => void
   onConfirm: () => void
   isSubmitting: boolean
+  isEditing?: boolean
 }
 
 const providerInfo = {
@@ -34,6 +35,7 @@ export function OverviewStep({
   onBack,
   onConfirm,
   isSubmitting,
+  isEditing = false,
 }: OverviewStepProps) {
   const providerDetails = providerInfo[provider]
   const Icon = providerDetails.icon
@@ -41,9 +43,13 @@ export function OverviewStep({
   return (
     <div className='flex flex-col gap-[16px]'>
       <div>
-        <h3 className='font-semibold text-[var(--text-primary)] text-base'>Review & Create</h3>
+        <h3 className='font-semibold text-[var(--text-primary)] text-base'>
+          {isEditing ? 'Review Changes' : 'Review & Create'}
+        </h3>
         <p className='mt-[4px] text-[var(--text-tertiary)] text-small'>
-          Review your profile settings before creating
+          {isEditing
+            ? 'Review your changes before saving'
+            : 'Review your profile settings before creating'}
         </p>
       </div>
 
@@ -83,10 +89,12 @@ export function OverviewStep({
           {isSubmitting ? (
             <>
               <Loader2 className='mr-[6px] h-[14px] w-[14px] animate-spin' />
-              Creating...
+              {isEditing ? 'Saving...' : 'Creating...'}
             </>
+          ) : isEditing ? (
+            'Save Changes'
           ) : (
-            'Create Profile'
+            'Create Agent'
           )}
         </Button>
       </div>

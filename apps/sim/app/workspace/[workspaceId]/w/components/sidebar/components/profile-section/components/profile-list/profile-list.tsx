@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { AgentProfile } from '@/lib/profiles/types'
 import { useProfileStore } from '@/stores/profiles/store'
 import { ProfileItem } from '../profile-item/profile-item'
@@ -15,7 +15,7 @@ interface ProfileListProps {
 
 /**
  * Reusable profile list component that displays a list of profiles.
- * Used for both "My Profiles" (global) and "Workspace Profiles" sections.
+ * Used for both "Global Agents" and "Workspace Agents" sections.
  */
 export function ProfileList({
   profiles,
@@ -25,7 +25,13 @@ export function ProfileList({
   onDelete,
 }: ProfileListProps) {
   const toggleProfile = useProfileStore((state) => state.toggleProfile)
-  const isProfileActivated = useProfileStore((state) => state.isProfileActivated)
+  // Subscribe to activatedProfiles state directly for proper reactivity
+  const activatedProfiles = useProfileStore((state) => state.activatedProfiles)
+
+  // Compute activated profile IDs for this workspace
+  const activatedProfileIds = useMemo(() => {
+    return activatedProfiles[workspaceId] || []
+  }, [activatedProfiles, workspaceId])
 
   const handleToggle = useCallback(
     (profileId: string) => {
@@ -48,7 +54,7 @@ export function ProfileList({
         <ProfileItem
           key={profile.id}
           profile={profile}
-          isActivated={isProfileActivated(workspaceId, profile.id)}
+          isActivated={activatedProfileIds.includes(profile.id)}
           isExecuting={isExecuting}
           onToggle={() => handleToggle(profile.id)}
           onEdit={() => onEdit(profile)}
