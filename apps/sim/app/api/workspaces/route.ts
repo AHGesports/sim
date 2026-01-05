@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { getSession } from '@/lib/auth'
 import { buildDefaultWorkflowArtifacts } from '@/lib/workflows/defaults'
 import { saveWorkflowToNormalizedTables } from '@/lib/workflows/persistence/utils'
+import { getOrCreateGlobalWorkspace } from '@/lib/workspaces/global'
 
 const logger = createLogger('Workspaces')
 
@@ -22,7 +23,35 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Get all workspaces where the user has permissions
+  // Get or create the Global workspace for the user
+  const globalWorkspace = await getOrCreateGlobalWorkspace(session.user.id)
+
+  // Ensure the user has admin permissions on their Global workspace
+  const globalPermission = await db
+    .select({ id: permissions.id })
+    .from(permissions)
+    .where(
+      and(
+        eq(permissions.userId, session.user.id),
+        eq(permissions.entityId, globalWorkspace.id),
+        eq(permissions.entityType, 'workspace')
+      )
+    )
+    .limit(1)
+
+  if (globalPermission.length === 0) {
+    await db.insert(permissions).values({
+      id: crypto.randomUUID(),
+      entityType: 'workspace' as const,
+      entityId: globalWorkspace.id,
+      userId: session.user.id,
+      permissionType: 'admin' as const,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  }
+
+  // Get all workspaces where the user has permissions (excluding global workspaces)
   const userWorkspaces = await db
     .select({
       workspace: workspace,
@@ -30,7 +59,13 @@ export async function GET() {
     })
     .from(permissions)
     .innerJoin(workspace, eq(permissions.entityId, workspace.id))
-    .where(and(eq(permissions.userId, session.user.id), eq(permissions.entityType, 'workspace')))
+    .where(
+      and(
+        eq(permissions.userId, session.user.id),
+        eq(permissions.entityType, 'workspace'),
+        eq(workspace.isGlobal, false)
+      )
+    )
     .orderBy(desc(workspace.createdAt))
 
   if (userWorkspaces.length === 0) {
@@ -40,7 +75,14 @@ export async function GET() {
     // Migrate existing workflows to the default workspace
     await migrateExistingWorkflows(session.user.id, defaultWorkspace.id)
 
-    return NextResponse.json({ workspaces: [defaultWorkspace] })
+    // Include the Global workspace in the response
+    const globalWorkspaceWithMeta = {
+      ...globalWorkspace,
+      role: 'owner',
+      permissions: 'admin',
+    }
+
+    return NextResponse.json({ workspaces: [defaultWorkspace], globalWorkspace: globalWorkspaceWithMeta })
   }
 
   // If user has workspaces but might have orphaned workflows, migrate them
@@ -55,7 +97,14 @@ export async function GET() {
     })
   )
 
-  return NextResponse.json({ workspaces: workspacesWithPermissions })
+  // Include the Global workspace in the response
+  const globalWorkspaceWithMeta = {
+    ...globalWorkspace,
+    role: 'owner',
+    permissions: 'admin',
+  }
+
+  return NextResponse.json({ workspaces: workspacesWithPermissions, globalWorkspace: globalWorkspaceWithMeta })
 }
 
 // POST /api/workspaces - Create a new workspace

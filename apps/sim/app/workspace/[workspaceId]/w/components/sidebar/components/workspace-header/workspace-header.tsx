@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createLogger } from '@sim/logger'
-import { ArrowDown, Plus } from 'lucide-react'
+import { ArrowDown, Bot, Globe, Plus } from 'lucide-react'
 import {
   Badge,
   Button,
@@ -27,6 +27,7 @@ interface Workspace {
   ownerId: string
   role?: string
   permissions?: 'admin' | 'write' | 'read' | null
+  isGlobal?: boolean
 }
 
 interface WorkspaceHeaderProps {
@@ -42,6 +43,10 @@ interface WorkspaceHeaderProps {
    * List of available workspaces
    */
   workspaces: Workspace[]
+  /**
+   * The global workspace (if available)
+   */
+  globalWorkspace?: Workspace | null
   /**
    * Whether workspaces are loading
    */
@@ -112,6 +117,7 @@ export function WorkspaceHeader({
   activeWorkspace,
   workspaceId,
   workspaces,
+  globalWorkspace,
   isWorkspacesLoading,
   isCreatingWorkspace,
   isWorkspaceMenuOpen,
@@ -144,6 +150,7 @@ export function WorkspaceHeader({
     id: string
     name: string
     permissions?: 'admin' | 'write' | 'read' | null
+    isGlobal?: boolean
   } | null>(null)
 
   const [isMounted, setIsMounted] = useState(false)
@@ -185,7 +192,10 @@ export function WorkspaceHeader({
     }
   }, [isWorkspaceMenuOpen, editingWorkspaceId, editingName, workspaces, onRenameWorkspace])
 
-  const activeWorkspaceFull = workspaces.find((w) => w.id === workspaceId) || null
+  // Check both regular workspaces and the global workspace
+  const activeWorkspaceFull =
+    workspaces.find((w) => w.id === workspaceId) ||
+    (globalWorkspace?.id === workspaceId ? globalWorkspace : null)
 
   /**
    * Handle right-click context menu
@@ -198,6 +208,7 @@ export function WorkspaceHeader({
       id: workspace.id,
       name: workspace.name,
       permissions: workspace.permissions,
+      isGlobal: workspace.isGlobal,
     }
     setContextMenuPosition({ x: e.clientX, y: e.clientY })
     setIsContextMenuOpen(true)
@@ -302,6 +313,19 @@ export function WorkspaceHeader({
                 >
                   {activeWorkspace?.name || 'Loading...'}
                 </span>
+                {activeWorkspaceFull?.isGlobal && (
+                  <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                      <span className='flex flex-shrink-0 items-center gap-1 rounded-[4px] bg-[var(--surface-6)] px-[6px] py-[1px] text-[11px] font-medium text-[var(--text-secondary)]'>
+                        <Globe className='h-[10px] w-[10px]' />
+                        Global
+                      </span>
+                    </Tooltip.Trigger>
+                    <Tooltip.Content className='py-[2.5px]'>
+                      <p>This is the Global workspace for workflows accessible everywhere</p>
+                    </Tooltip.Content>
+                  </Tooltip.Root>
+                )}
                 <ChevronDown
                   className={`h-[8px] w-[12px] flex-shrink-0 text-[var(--text-muted)] transition-transform duration-100 ${
                     isWorkspaceMenuOpen ? 'rotate-180' : ''
@@ -425,11 +449,28 @@ export function WorkspaceHeader({
                             onClick={() => onWorkspaceSwitch(workspace)}
                             onContextMenu={(e) => handleContextMenu(e, workspace)}
                           >
+                            <Bot className='h-[12px] w-[12px] flex-shrink-0 text-[var(--text-tertiary)]' />
                             <span className='min-w-0 flex-1 truncate'>{workspace.name}</span>
                           </PopoverItem>
                         )}
                       </div>
                     ))}
+                    {/* Global Workspace - always shown with active indicator when selected */}
+                    {globalWorkspace && (
+                      <div className='mt-[2px]'>
+                        <PopoverItem
+                          active={globalWorkspace.id === workspaceId}
+                          onClick={() => onWorkspaceSwitch(globalWorkspace)}
+                          onContextMenu={(e) => handleContextMenu(e, globalWorkspace)}
+                        >
+                          <Globe className='h-[12px] w-[12px] flex-shrink-0 text-[var(--text-tertiary)]' />
+                          <span className='min-w-0 flex-1 truncate'>{globalWorkspace.name}</span>
+                          <span className='flex-shrink-0 rounded-[3px] bg-[var(--surface-6)] px-[4px] py-[1px] text-[10px] font-medium text-[var(--text-tertiary)]'>
+                            Global
+                          </span>
+                        </PopoverItem>
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -481,6 +522,7 @@ export function WorkspaceHeader({
       {/* Context Menu */}
       {(() => {
         const capturedPermissions = capturedWorkspaceRef.current?.permissions
+        const capturedIsGlobal = capturedWorkspaceRef.current?.isGlobal
         const contextCanEdit = capturedPermissions === 'admin' || capturedPermissions === 'write'
         const contextCanAdmin = capturedPermissions === 'admin'
 
@@ -497,10 +539,10 @@ export function WorkspaceHeader({
             showRename={true}
             showDuplicate={true}
             showExport={true}
-            disableRename={!contextCanEdit}
-            disableDuplicate={!contextCanEdit}
+            disableRename={!contextCanEdit || capturedIsGlobal}
+            disableDuplicate={!contextCanEdit || capturedIsGlobal}
             disableExport={!contextCanAdmin}
-            disableDelete={!contextCanAdmin}
+            disableDelete={!contextCanAdmin || capturedIsGlobal}
           />
         )
       })()}
@@ -510,6 +552,7 @@ export function WorkspaceHeader({
         open={isInviteModalOpen}
         onOpenChange={setIsInviteModalOpen}
         workspaceName={activeWorkspace?.name || 'Workspace'}
+        isGlobalWorkspace={activeWorkspaceFull?.isGlobal}
       />
       {/* Delete Confirmation Modal */}
       <DeleteModal

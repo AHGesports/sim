@@ -2,6 +2,7 @@
 
 import React, { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { createLogger } from '@sim/logger'
+import { Globe } from 'lucide-react'
 import { useParams } from 'next/navigation'
 import {
   Button,
@@ -27,6 +28,7 @@ interface InviteModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   workspaceName?: string
+  isGlobalWorkspace?: boolean
 }
 
 interface PendingInvitation {
@@ -38,7 +40,7 @@ interface PendingInvitation {
   createdAt: string
 }
 
-export function InviteModal({ open, onOpenChange, workspaceName }: InviteModalProps) {
+export function InviteModal({ open, onOpenChange, workspaceName, isGlobalWorkspace }: InviteModalProps) {
   const formRef = useRef<HTMLFormElement>(null)
   const [inputValue, setInputValue] = useState('')
   const [emails, setEmails] = useState<string[]>([])
@@ -683,6 +685,22 @@ export function InviteModal({ open, onOpenChange, workspaceName }: InviteModalPr
           autoComplete='off'
         >
           <ModalBody>
+            {/* Global workspace warning */}
+            {isGlobalWorkspace && (
+              <div className='mb-[12px] flex items-start gap-[10px] rounded-[6px] border border-amber-500/30 bg-amber-500/10 p-[10px]'>
+                <Globe className='mt-[1px] h-[16px] w-[16px] flex-shrink-0 text-amber-600' />
+                <div>
+                  <p className='font-medium text-[13px] text-amber-600'>
+                    Sharing your Global workspace
+                  </p>
+                  <p className='mt-[2px] text-[12px] text-[var(--text-secondary)]'>
+                    Invited members will have access to ALL workflows in this Global workspace.
+                    Global workflows are accessible from any workspace.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className='space-y-[12px]'>
               <div>
                 <Label

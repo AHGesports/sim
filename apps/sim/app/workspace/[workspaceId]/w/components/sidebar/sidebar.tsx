@@ -2,16 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createLogger } from '@sim/logger'
-import { ArrowDown, Database, HelpCircle, Layout, Plus, Search, Settings } from 'lucide-react'
+import { ArrowDown, Bot, ChevronRight, Database, HelpCircle, Layout, Plus, Search, Settings, Workflow } from 'lucide-react'
 import Link from 'next/link'
 import { useParams, usePathname, useRouter } from 'next/navigation'
 import { Button, FolderPlus, Library, Tooltip } from '@/components/emcn'
+import { cn } from '@/lib/core/utils/cn'
 import { useSession } from '@/lib/auth/auth-client'
 import { getEnv, isTruthy } from '@/lib/core/config/env'
 import { useRegisterGlobalCommands } from '@/app/workspace/[workspaceId]/providers/global-commands-provider'
 import { useUserPermissionsContext } from '@/app/workspace/[workspaceId]/providers/workspace-permissions-provider'
 import { createCommands } from '@/app/workspace/[workspaceId]/utils/commands-utils'
 import {
+  GlobalWorkflowsSection,
   HelpModal,
   SearchModal,
   SettingsModal,
@@ -82,6 +84,7 @@ export function Sidebar() {
   const isOnWorkflowPage = !!workflowId
 
   const [isImporting, setIsImporting] = useState(false)
+  const [isWorkflowsExpanded, setIsWorkflowsExpanded] = useState(true)
   const workspaceFileInputRef = useRef<HTMLInputElement>(null)
 
   const { isImporting: isImportingWorkspace, handleImportWorkspace: importWorkspace } =
@@ -143,6 +146,7 @@ export function Sidebar() {
 
   const {
     workspaces,
+    globalWorkspace,
     activeWorkspace,
     isWorkspacesLoading,
     switchWorkspace,
@@ -233,6 +237,9 @@ export function Sidebar() {
 
   const isLoading = workflowsLoading || sessionLoading
   const initialScrollDoneRef = useRef(false)
+
+  /** Check if we are currently inside the global workspace */
+  const isInGlobalWorkspace = globalWorkspace?.id === workspaceId
 
   /** Scrolls to active workflow on initial page load only */
   useEffect(() => {
@@ -444,6 +451,7 @@ export function Sidebar() {
             activeWorkspace={activeWorkspace}
             workspaceId={workspaceId}
             workspaces={workspaces}
+            globalWorkspace={globalWorkspace}
             isWorkspacesLoading={isWorkspacesLoading}
             isCreatingWorkspace={isCreatingWorkspace}
             isWorkspaceMenuOpen={isWorkspaceMenuOpen}
@@ -477,6 +485,7 @@ export function Sidebar() {
                   activeWorkspace={activeWorkspace}
                   workspaceId={workspaceId}
                   workspaces={workspaces}
+                  globalWorkspace={globalWorkspace}
                   isWorkspacesLoading={isWorkspacesLoading}
                   isCreatingWorkspace={isCreatingWorkspace}
                   isWorkspaceMenuOpen={isWorkspaceMenuOpen}
@@ -509,79 +518,136 @@ export function Sidebar() {
                 <p className='font-medium text-[var(--text-subtle)] text-small'>⌘K</p>
               </div>
 
-              {/* Workflows */}
-              <div className='workflows-section relative mt-[14px] flex flex-1 flex-col overflow-hidden'>
-                {/* Header - Always visible */}
-                <div className='flex flex-shrink-0 flex-col space-y-[4px] px-[14px]'>
-                  <div className='flex items-center justify-between'>
-                    <div className='font-medium text-[var(--text-tertiary)] text-small'>
-                      Workflows
-                    </div>
-                    <div className='flex items-center justify-center gap-[10px]'>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <Button
-                            variant='ghost'
-                            className='translate-y-[-0.25px] p-[1px]'
-                            onClick={handleImportWorkflow}
-                            disabled={isImporting || !canEdit}
-                          >
-                            <ArrowDown className='h-[14px] w-[14px]' />
-                          </Button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Content className='py-[2.5px]'>
-                          <p>{isImporting ? 'Importing workflow...' : 'Import workflow'}</p>
-                        </Tooltip.Content>
-                      </Tooltip.Root>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <Button
-                            variant='ghost'
-                            className='mr-[1px] translate-y-[-0.25px] p-[1px]'
-                            onClick={handleCreateFolder}
-                            disabled={isCreatingFolder || !canEdit}
-                          >
-                            <FolderPlus className='h-[14px] w-[14px]' />
-                          </Button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Content className='py-[2.5px]'>
-                          <p>{isCreatingFolder ? 'Creating folder...' : 'Create folder'}</p>
-                        </Tooltip.Content>
-                      </Tooltip.Root>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <Button
-                            variant='outline'
-                            className='translate-y-[-0.25px] p-[1px]'
-                            onClick={handleCreateWorkflow}
-                            disabled={isCreatingWorkflow || !canEdit}
-                          >
-                            <Plus className='h-[14px] w-[14px]' />
-                          </Button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Content className='py-[2.5px]'>
-                          <p>{isCreatingWorkflow ? 'Creating workflow...' : 'Create workflow'}</p>
-                        </Tooltip.Content>
-                      </Tooltip.Root>
+              {/* Workflows - Hidden when in global workspace */}
+              {!isInGlobalWorkspace && (
+                <div className='workflows-section relative mt-[14px] flex flex-1 flex-col overflow-hidden' style={{ maxHeight: globalWorkspace ? '50%' : undefined }}>
+                  {/* Section Title */}
+                  <div className='flex flex-shrink-0 flex-col space-y-[4px] px-[14px]'>
+                    <div className='flex items-center gap-[6px] font-medium text-[var(--text-tertiary)] text-small'>
+                      <Bot className='h-[14px] w-[14px]' />
+                      <span>Agent</span>
                     </div>
                   </div>
-                </div>
 
-                {/* Scrollable workflow list */}
-                <div
-                  ref={scrollContainerRef}
-                  className='mt-[6px] flex-1 overflow-y-auto overflow-x-hidden px-[8px]'
-                >
-                  <WorkflowList
-                    regularWorkflows={regularWorkflows}
-                    isLoading={isLoading}
-                    isImporting={isImporting}
-                    setIsImporting={setIsImporting}
-                    fileInputRef={fileInputRef}
-                    scrollContainerRef={scrollContainerRef}
+                  {/* Collapsible Workflows Header */}
+                  <div className='mt-[8px] px-[8px]'>
+                    <div
+                      className={cn(
+                        'flex items-center justify-between rounded-[6px] px-[6px] py-[4px]',
+                        'hover:bg-[var(--surface-6)] dark:hover:bg-[var(--surface-5)]',
+                        'cursor-pointer transition-colors'
+                      )}
+                    >
+                      <button
+                        onClick={() => setIsWorkflowsExpanded((prev) => !prev)}
+                        className='flex items-center gap-[6px] text-[13px] font-medium text-[var(--text-secondary)]'
+                      >
+                        <ChevronRight
+                          className={cn(
+                            'h-[12px] w-[12px] transition-transform duration-200',
+                            isWorkflowsExpanded && 'rotate-90'
+                          )}
+                        />
+                        <Workflow className='h-[12px] w-[12px]' />
+                        <span>Workflows</span>
+                      </button>
+
+                      {/* Action buttons */}
+                      <div className='flex items-center gap-[6px]'>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <Button
+                              variant='ghost'
+                              className='h-[20px] w-[20px] p-0'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleImportWorkflow()
+                              }}
+                              disabled={isImporting || !canEdit}
+                            >
+                              <ArrowDown className='h-[12px] w-[12px]' />
+                            </Button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content className='py-[2.5px]'>
+                            <p>{isImporting ? 'Importing workflow...' : 'Import workflow'}</p>
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <Button
+                              variant='ghost'
+                              className='h-[20px] w-[20px] p-0'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleCreateFolder()
+                              }}
+                              disabled={isCreatingFolder || !canEdit}
+                            >
+                              <FolderPlus className='h-[12px] w-[12px]' />
+                            </Button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content className='py-[2.5px]'>
+                            <p>{isCreatingFolder ? 'Creating folder...' : 'Create folder'}</p>
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild>
+                            <Button
+                              variant='outline'
+                              className='h-[20px] w-[20px] p-0'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleCreateWorkflow()
+                              }}
+                              disabled={isCreatingWorkflow || !canEdit}
+                            >
+                              <Plus className='h-[12px] w-[12px]' />
+                            </Button>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content className='py-[2.5px]'>
+                            <p>{isCreatingWorkflow ? 'Creating workflow...' : 'Create workflow'}</p>
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Collapsible Workflow List */}
+                  {isWorkflowsExpanded && (
+                    <div
+                      ref={scrollContainerRef}
+                      className='mt-[4px] flex-1 overflow-y-auto overflow-x-hidden px-[8px]'
+                    >
+                      <WorkflowList
+                        regularWorkflows={regularWorkflows}
+                        isLoading={isLoading}
+                        isImporting={isImporting}
+                        setIsImporting={setIsImporting}
+                        fileInputRef={fileInputRef}
+                        scrollContainerRef={scrollContainerRef}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Global Workflows Section */}
+              {globalWorkspace && !isInGlobalWorkspace && (
+                <GlobalWorkflowsSection
+                  globalWorkspace={globalWorkspace}
+                  regularWorkspaces={workspaces}
+                />
+              )}
+
+              {/* When inside global workspace, show only GlobalWorkflowsSection */}
+              {isInGlobalWorkspace && globalWorkspace && (
+                <div className='mt-[14px] flex flex-1 flex-col overflow-hidden'>
+                  <GlobalWorkflowsSection
+                    globalWorkspace={globalWorkspace}
+                    regularWorkspaces={workspaces}
                   />
                 </div>
-              </div>
+              )}
 
               {/* Usage Indicator */}
               {isBillingEnabled && <UsageIndicator />}

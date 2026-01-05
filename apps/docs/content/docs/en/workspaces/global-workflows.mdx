@@ -1,0 +1,250 @@
+---
+title: Global Workflows
+---
+
+import { Callout } from 'fumadocs-ui/components/callout'
+import { Steps, Step } from 'fumadocs-ui/components/steps'
+
+Global Workflows provide a way to create automation that's accessible from any workspace in your account. Instead of duplicating workflows across multiple workspaces, you can create them once in the Global workspace and run them anywhere.
+
+## What are Global Workflows?
+
+Global Workflows are workflows stored in a special "Global" workspace that appears in all your regular workspaces. They're perfect for:
+
+- **Shared templates** - Common patterns used across multiple projects
+- **Utility workflows** - Reusable automation like data formatting or notifications
+- **Organization-wide processes** - Standardized procedures that apply everywhere
+- **Cross-project automation** - Workflows that need to interact with multiple workspaces
+
+## The Global Workspace
+
+The Global workspace is a special workspace that behaves differently from regular workspaces:
+
+| Feature | Regular Workspace | Global Workspace |
+|---------|------------------|------------------|
+| Visibility | Only in that workspace | Appears in all workspaces |
+| Execution context | Uses own environment | Uses target workspace's environment |
+| Team access | Invite per workspace | Share once, accessible everywhere |
+| Folder support | Yes | Yes |
+
+<Callout type="info">
+The Global workspace is automatically created for each user. You don't need to create it manually.
+</Callout>
+
+## Finding the Global Section
+
+The Global section appears in the sidebar below your current workspace's workflows:
+
+1. Open any workspace
+2. Scroll down in the sidebar
+3. Look for the **Global** section with a globe icon
+4. Click the chevron to expand or collapse the section
+
+The section header shows the total count of global workflows and provides quick actions for creating new workflows and folders.
+
+## Creating Global Workflows
+
+<Steps>
+<Step>
+### Navigate to the Global Section
+
+In the sidebar, find the Global section below your current workspace's workflows.
+</Step>
+
+<Step>
+### Create a New Workflow
+
+Click the **+** button in the Global section header to create a new workflow. You can also create folders using the folder icon to organize your global workflows.
+</Step>
+
+<Step>
+### Build Your Workflow
+
+The workflow editor opens in the Global workspace context. Build your workflow using the visual canvas just like any other workflow.
+</Step>
+
+<Step>
+### Save and Use
+
+Your workflow is now available in the Global section of all your workspaces.
+</Step>
+</Steps>
+
+## Running Global Workflows
+
+Global workflows can be executed in two ways:
+
+### Single Workspace Execution
+
+Click on a global workflow to open it, then run it like any other workflow. It will execute using the current workspace's context (environment variables, API keys, etc.).
+
+### Multi-Workspace Execution
+
+Run the same global workflow across multiple workspaces simultaneously:
+
+<Steps>
+<Step>
+### Open the Workspace Selector
+
+Right-click on a global workflow and select **Run in workspaces...** to open the workspace selector modal.
+</Step>
+
+<Step>
+### Select Target Workspaces
+
+Check the boxes next to the workspaces where you want to run the workflow. Use **Select All** to choose all workspaces, or **Clear** to reset your selection.
+</Step>
+
+<Step>
+### Execute
+
+Click **Run** to execute the workflow in all selected workspaces. Each workspace opens in a new browser tab with the workflow running.
+</Step>
+</Steps>
+
+<Callout type="info">
+When running in multiple workspaces, each execution uses that workspace's own environment variables and credentials. This allows the same workflow to interact with different systems based on the workspace context.
+</Callout>
+
+## Editing Global Workflows
+
+When you click on a global workflow to edit it:
+
+1. You're navigated to the Global workspace
+2. The sidebar header shows "Global" with a badge indicator
+3. All changes are saved to the Global workspace
+4. Changes are immediately reflected across all workspaces
+
+<Callout type="warning">
+Be careful when editing global workflows as changes affect all workspaces immediately. Consider testing changes in a regular workspace first.
+</Callout>
+
+## Sharing the Global Workspace
+
+The Global workspace uses the same sharing mechanism as regular workspaces:
+
+<Steps>
+<Step>
+### Open Share Settings
+
+Click the **Share** button in the Global section header or navigate to the Global workspace and use the workspace header share option.
+</Step>
+
+<Step>
+### Invite Team Members
+
+Enter email addresses and select permission levels (Read, Write, or Admin).
+</Step>
+
+<Step>
+### Confirm Sharing
+
+A warning indicates that sharing grants access to ALL global workflows. Confirm to send invitations.
+</Step>
+</Steps>
+
+### Permission Levels for Global Workspace
+
+| Permission | What They Can Do |
+|------------|------------------|
+| **Read** | View global workflows and execution results in any workspace |
+| **Write** | Create, edit, and run global workflows |
+| **Admin** | All Write permissions plus invite/remove users from Global workspace |
+
+## Execution Context
+
+Understanding how global workflows use execution context is crucial:
+
+### Environment Variables
+
+When a global workflow runs in a target workspace:
+- It uses the **target workspace's** environment variables
+- Personal environment variables still override workspace variables
+- The Global workspace's environment variables are NOT used
+
+### Credentials and API Keys
+
+- OAuth connections are user-specific and work in any workspace
+- API keys from workspace environment variables come from the target workspace
+- This allows the same workflow to interact with different systems per workspace
+
+### Execution Logs
+
+- Logs are stored in the **target workspace** where the workflow ran
+- You can view execution history in each workspace's logs
+- The Global workspace does not aggregate logs from all workspaces
+
+## Use Cases
+
+### Cross-Project Reporting
+
+Create a global workflow that generates reports, then run it in multiple project workspaces to produce project-specific reports using each workspace's data.
+
+### Standardized Notifications
+
+Build a notification workflow once and use it across all workspaces. Each workspace can have different Slack channels or email recipients configured in their environment variables.
+
+### Data Synchronization
+
+Create a workflow that syncs data between systems. Run it in different workspaces to sync data for different clients or projects.
+
+### Template Workflows
+
+Create workflow templates in the Global workspace. Team members can reference these patterns when building workspace-specific automation.
+
+## Best Practices
+
+### Design for Reusability
+
+When creating global workflows:
+- Use environment variables for workspace-specific configuration
+- Avoid hardcoding values that should vary by workspace
+- Document which environment variables the workflow expects
+
+### Organize with Folders
+
+Use folders in the Global workspace to categorize workflows:
+- **Templates** - Reference patterns for common use cases
+- **Utilities** - Helper workflows for data processing
+- **Notifications** - Alert and messaging workflows
+- **Reporting** - Dashboard and report generation
+
+### Test Before Deploying
+
+Before sharing a global workflow:
+1. Test it thoroughly in the Global workspace
+2. Document the required environment variables
+3. Verify it works with different workspace contexts
+
+### Limit Global Workflow Count
+
+Keep the Global workspace focused:
+- Only promote truly reusable workflows to Global
+- Workspace-specific workflows should stay in their workspace
+- Regularly review and archive unused global workflows
+
+## Troubleshooting
+
+### Workflow Not Appearing in Global Section
+
+- Ensure you're viewing a workspace, not the Global workspace itself
+- Check that the Global section is expanded (click the chevron)
+- Verify you have at least Read permission on the Global workspace
+
+### Execution Using Wrong Environment Variables
+
+- Remember that global workflows use the target workspace's environment
+- Check that required variables are set in the target workspace
+- Personal variables override workspace variables
+
+### Cannot Edit Global Workflow
+
+- Verify you have Write permission on the Global workspace
+- Check if another user is currently editing the workflow
+- Ensure you're not in Read-only mode
+
+### Multi-Workspace Execution Not Working
+
+- Ensure you have at least Read permission in target workspaces
+- Check that popup blockers aren't preventing new tabs from opening
+- Verify the workflow doesn't have errors that prevent execution

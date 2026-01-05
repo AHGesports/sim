@@ -13,6 +13,7 @@ interface Workspace {
   role?: string
   membershipId?: string
   permissions?: 'admin' | 'write' | 'read' | null
+  isGlobal?: boolean
 }
 
 interface UseWorkspaceManagementProps {
@@ -37,6 +38,7 @@ export function useWorkspaceManagement({
 
   // Workspace management state
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [globalWorkspace, setGlobalWorkspace] = useState<Workspace | null>(null)
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(null)
   const [isWorkspacesLoading, setIsWorkspacesLoading] = useState(true)
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false)
@@ -69,6 +71,11 @@ export function useWorkspaceManagement({
         const fetchedWorkspaces = data.workspaces as Workspace[]
         setWorkspaces(fetchedWorkspaces)
 
+        // Set global workspace if returned
+        if (data.globalWorkspace) {
+          setGlobalWorkspace(data.globalWorkspace as Workspace)
+        }
+
         // Only update activeWorkspace if it still exists in the fetched workspaces
         // Use functional update to avoid dependency on activeWorkspace
         setActiveWorkspace((currentActive) => {
@@ -76,11 +83,17 @@ export function useWorkspaceManagement({
             return currentActive
           }
 
+          // Check both regular workspaces and global workspace
           const matchingWorkspace = fetchedWorkspaces.find(
             (workspace) => workspace.id === currentActive.id
           )
           if (matchingWorkspace) {
             return matchingWorkspace
+          }
+
+          // Check if it's the global workspace
+          if (data.globalWorkspace && data.globalWorkspace.id === currentActive.id) {
+            return data.globalWorkspace as Workspace
           }
 
           // Active workspace was deleted, clear it
@@ -109,16 +122,25 @@ export function useWorkspaceManagement({
         const fetchedWorkspaces = data.workspaces as Workspace[]
         setWorkspaces(fetchedWorkspaces)
 
+        // Set global workspace if returned
+        if (data.globalWorkspace) {
+          setGlobalWorkspace(data.globalWorkspace as Workspace)
+        }
+
         // Handle active workspace selection with URL validation using refs
         const currentWorkspaceId = workspaceIdRef.current
         const currentRouter = routerRef.current
 
         if (currentWorkspaceId) {
+          // Check regular workspaces first
           const matchingWorkspace = fetchedWorkspaces.find(
             (workspace) => workspace.id === currentWorkspaceId
           )
           if (matchingWorkspace) {
             setActiveWorkspace(matchingWorkspace)
+          } else if (data.globalWorkspace && data.globalWorkspace.id === currentWorkspaceId) {
+            // Check if it's the global workspace
+            setActiveWorkspace(data.globalWorkspace as Workspace)
           } else {
             logger.warn(`Workspace ${currentWorkspaceId} not found in user's workspaces`)
 
@@ -406,6 +428,7 @@ export function useWorkspaceManagement({
   return {
     // State
     workspaces,
+    globalWorkspace,
     activeWorkspace,
     isWorkspacesLoading,
     isCreatingWorkspace,

@@ -1,3 +1,4 @@
+export { GlobalWorkflowsSection, WorkspaceSelectorModal } from './global-workflows-section'
 export { HelpModal } from './help-modal/help-modal'
 export { SearchModal } from './search-modal/search-modal'
 export { SettingsModal } from './settings-modal/settings-modal'

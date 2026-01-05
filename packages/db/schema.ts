@@ -856,6 +856,7 @@ export const workspace = pgTable('workspace', {
     .notNull()
     .references(() => user.id, { onDelete: 'no action' }),
   allowPersonalApiKeys: boolean('allow_personal_api_keys').notNull().default(true),
+  isGlobal: boolean('is_global').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })

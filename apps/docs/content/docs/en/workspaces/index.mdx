@@ -1,0 +1,168 @@
+---
+title: Workspaces
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card'
+import { Callout } from 'fumadocs-ui/components/callout'
+
+Workspaces are organizational containers that help you group related workflows, manage team access, and separate concerns across different projects or departments. Each workspace has its own set of workflows, folders, environment variables, and team permissions.
+
+## What is a Workspace?
+
+A workspace is a dedicated environment where you and your team can:
+
+- **Organize workflows** into logical groups using folders
+- **Collaborate with team members** with granular permission controls
+- **Manage environment variables** specific to that workspace
+- **Track execution logs** and monitor workflow performance
+- **Share resources** like API keys and configurations
+
+Think of workspaces as separate projects or departments within your organization. Each workspace operates independently, allowing teams to work without interfering with each other.
+
+## Workspace Types
+
+Sim provides two types of workspaces to address different organizational needs:
+
+### Regular Workspaces
+
+Standard workspaces for organizing project-specific workflows:
+
+- **Isolated environments** - Each workspace has its own workflows, variables, and settings
+- **Team collaboration** - Invite members with Read, Write, or Admin permissions
+- **Folder organization** - Group related workflows into folders
+- **Independent execution** - Workflows run with workspace-specific context
+
+### Global Workspace
+
+A special workspace for workflows that need to be accessible from anywhere:
+
+- **Cross-workspace access** - Global workflows appear in all your workspaces
+- **Multi-workspace execution** - Run the same workflow across multiple workspaces simultaneously
+- **Shared templates** - Create reusable workflow patterns for your organization
+- **Centralized management** - Maintain common automation in one place
+
+<Callout type="info">
+Learn more about the Global workspace in the [Global Workflows](/workspaces/global-workflows) guide.
+</Callout>
+
+## Creating a Workspace
+
+To create a new workspace:
+
+1. Click on the workspace dropdown in the sidebar header
+2. Select **Create Workspace**
+3. Enter a name for your workspace
+4. Click **Create**
+
+Your new workspace is ready to use immediately. You can start creating workflows, inviting team members, and organizing your automation.
+
+## Workspace Structure
+
+Each workspace contains:
+
+| Component | Description |
+|-----------|-------------|
+| **Workflows** | The automation flows you build and run |
+| **Folders** | Organizational containers for grouping workflows |
+| **Environment Variables** | Key-value pairs available to all workflows in the workspace |
+| **Team Members** | Users with access to the workspace and their permission levels |
+| **Execution Logs** | History of workflow runs and their results |
+
+## Managing Workspaces
+
+### Switching Workspaces
+
+Click on the workspace name in the sidebar header to open the workspace switcher. Select any workspace to navigate to it.
+
+### Workspace Settings
+
+Access workspace settings through the settings icon in the sidebar header. Here you can:
+
+- Rename the workspace
+- Manage environment variables
+- View and manage team members
+- Configure workspace-specific integrations
+
+### Deleting a Workspace
+
+<Callout type="warning">
+Only the workspace owner can delete a workspace. This action permanently removes all workflows, folders, and execution history.
+</Callout>
+
+To delete a workspace:
+
+1. Navigate to the workspace settings
+2. Scroll to the danger zone
+3. Click **Delete Workspace**
+4. Confirm the deletion
+
+## Team Collaboration
+
+Workspaces support real-time collaboration with your team:
+
+### Inviting Team Members
+
+1. Click the **Share** button in the workspace header
+2. Enter the email address of the person you want to invite
+3. Select their permission level (Read, Write, or Admin)
+4. Click **Invite**
+
+### Permission Levels
+
+| Permission | Capabilities |
+|------------|-------------|
+| **Read** | View workflows and execution results |
+| **Write** | Create, edit, and run workflows |
+| **Admin** | All Write permissions plus user management |
+
+For detailed information about permissions, see [Roles and Permissions](/permissions/roles-and-permissions).
+
+## Environment Variables
+
+Each workspace has its own set of environment variables that are available to all workflows within it:
+
+- **Workspace variables** are shared across all team members
+- **Personal variables** (set in user settings) override workspace variables with the same name
+- **Variables are secure** and encrypted at rest
+
+To manage environment variables:
+
+1. Open the workspace settings
+2. Navigate to the **Environment Variables** section
+3. Add, edit, or remove variables as needed
+
+## Best Practices
+
+### Organize by Project or Team
+
+Create separate workspaces for different projects, clients, or teams. This keeps workflows organized and allows for appropriate access control.
+
+### Use Folders Within Workspaces
+
+Group related workflows into folders within each workspace. This helps maintain organization as your automation grows.
+
+### Leverage the Global Workspace
+
+Use the Global workspace for workflows that are used across multiple contexts, such as:
+
+- Common utility workflows
+- Organization-wide templates
+- Cross-project automation
+
+### Set Appropriate Permissions
+
+Grant team members the minimum permissions they need. Start with Read access and increase as needed.
+
+## Next Steps
+
+<Cards>
+  <Card title="Global Workflows" href="/workspaces/global-workflows">
+    Learn about cross-workspace automation
+  </Card>
+  <Card title="Roles and Permissions" href="/permissions/roles-and-permissions">
+    Set up team access controls
+  </Card>
+  <Card title="Getting Started" href="/getting-started">
+    Build your first workflow
+  </Card>
+</Cards>

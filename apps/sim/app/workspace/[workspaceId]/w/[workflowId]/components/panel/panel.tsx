@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createLogger } from '@sim/logger'
 import { ArrowUp, Square } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
 import {
   BubbleChatPreview,
   Button,
@@ -22,6 +23,7 @@ import {
   PopoverTrigger,
   Trash,
 } from '@/components/emcn'
+import { WorkspaceSelectorModal } from '@/app/workspace/[workspaceId]/w/components/sidebar/components/global-workflows-section'
 import { VariableIcon } from '@/components/icons'
 import { useRegisterGlobalCommands } from '@/app/workspace/[workspaceId]/providers/global-commands-provider'
 import { useUserPermissionsContext } from '@/app/workspace/[workspaceId]/providers/workspace-permissions-provider'
@@ -69,9 +71,12 @@ const logger = createLogger('Panel')
 export function Panel() {
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const workspaceId = params.workspaceId as string
+  const workflowId = params.workflowId as string
 
   const panelRef = useRef<HTMLElement>(null)
+  const autorunTriggeredRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { activeTab, setActiveTab, panelWidth, _hasHydrated, setHasHydrated } = usePanelStore()
   const copilotRef = useRef<{
@@ -89,6 +94,46 @@ export function Panel() {
   const [isExporting, setIsExporting] = useState(false)
   const [isDuplicating, setIsDuplicating] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isWorkspaceSelectorOpen, setIsWorkspaceSelectorOpen] = useState(false)
+
+  /** Fetch current workspace details including isGlobal flag and name */
+  const { data: workspaceData } = useQuery({
+    queryKey: ['workspace', 'detail', workspaceId],
+    queryFn: async () => {
+      const response = await fetch(`/api/workspaces/${workspaceId}`)
+      if (!response.ok) throw new Error('Failed to fetch workspace')
+      const data = await response.json()
+      return data.workspace as {
+        id: string
+        name: string
+        isGlobal: boolean
+      }
+    },
+    enabled: !!workspaceId,
+    staleTime: 60 * 1000,
+  })
+
+  /** Fetch all workspaces for the workspace selector modal */
+  const { data: workspacesData } = useQuery({
+    queryKey: ['workspaces', 'list'],
+    queryFn: async () => {
+      const response = await fetch('/api/workspaces')
+      if (!response.ok) throw new Error('Failed to fetch workspaces')
+      const data = await response.json()
+      return data.workspaces as Array<{
+        id: string
+        name: string
+        ownerId: string
+        role?: string
+      }>
+    },
+    enabled: workspaceData?.isGlobal === true,
+    staleTime: 60 * 1000,
+  })
+
+  const isGlobalWorkspace = workspaceData?.isGlobal === true
+  const workspaceName = workspaceData?.name || ''
+  const regularWorkspaces = useMemo(() => workspacesData || [], [workspacesData])
 
   // Hooks
   const userPermissions = useUserPermissionsContext()
@@ -166,6 +211,48 @@ export function Panel() {
   useEffect(() => {
     setHasHydrated(true)
   }, [setHasHydrated])
+
+  /**
+   * Handle autorun URL parameter for global workflow execution.
+   * When a global workflow is opened with ?autorun=true&source=global,
+   * automatically trigger the workflow execution.
+   */
+  useEffect(() => {
+    const autorun = searchParams.get('autorun') === 'true'
+    const source = searchParams.get('source')
+
+    // Only trigger autorun for global workflow execution
+    if (
+      autorun &&
+      source === 'global' &&
+      !autorunTriggeredRef.current &&
+      !isRegistryLoading &&
+      activeWorkflowId &&
+      !isExecuting
+    ) {
+      autorunTriggeredRef.current = true
+
+      // Clear URL parameters to prevent re-triggering on refresh
+      const newUrl = `/workspace/${workspaceId}/w/${workflowId}`
+      router.replace(newUrl, { scroll: false })
+
+      // Trigger workflow execution
+      logger.info('Auto-running global workflow in workspace context', {
+        workflowId: activeWorkflowId,
+        workspaceId,
+      })
+      void runWorkflow()
+    }
+  }, [
+    searchParams,
+    isRegistryLoading,
+    activeWorkflowId,
+    isExecuting,
+    workspaceId,
+    workflowId,
+    router,
+    runWorkflow,
+  ])
 
   /**
    * Handles tab click events
@@ -422,7 +509,13 @@ export function Panel() {
               <Button
                 className='h-[30px] gap-[8px] px-[10px]'
                 variant={isExecuting ? 'active' : 'tertiary'}
-                onClick={isExecuting ? cancelWorkflow : () => runWorkflow()}
+                onClick={
+                  isExecuting
+                    ? cancelWorkflow
+                    : isGlobalWorkspace
+                      ? () => setIsWorkspaceSelectorOpen(true)
+                      : () => runWorkflow()
+                }
                 disabled={!isExecuting && isButtonDisabled}
               >
                 {isExecuting ? (
@@ -430,7 +523,13 @@ export function Panel() {
                 ) : (
                   <Play className='h-[11.5px] w-[11.5px]' />
                 )}
-                {isExecuting ? 'Stop' : 'Run'}
+                {isExecuting
+                  ? 'Stop'
+                  : isGlobalWorkspace
+                    ? 'Run All'
+                    : workspaceName
+                      ? `Run ${workspaceName}`
+                      : 'Run'}
               </Button>
             </div>
           </div>
@@ -559,6 +658,15 @@ export function Panel() {
 
       {/* Floating Variables Modal */}
       <Variables />
+
+      {/* Workspace Selector Modal for Global Workflows */}
+      <WorkspaceSelectorModal
+        isOpen={isWorkspaceSelectorOpen}
+        onClose={() => setIsWorkspaceSelectorOpen(false)}
+        workflowId={workflowId}
+        workflowName={currentWorkflow?.name || 'Workflow'}
+        workspaces={regularWorkspaces}
+      />
     </>
   )
 }

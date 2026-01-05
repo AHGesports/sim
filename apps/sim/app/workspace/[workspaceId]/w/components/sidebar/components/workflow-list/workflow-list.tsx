@@ -21,6 +21,13 @@ const TREE_SPACING = {
   INDENT_PER_LEVEL: 20,
 } as const
 
+interface RegularWorkspace {
+  id: string
+  name: string
+  ownerId: string
+  role?: string
+}
+
 interface WorkflowListProps {
   regularWorkflows: WorkflowMetadata[]
   isLoading?: boolean
@@ -28,6 +35,9 @@ interface WorkflowListProps {
   setIsImporting: (value: boolean) => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
   scrollContainerRef: React.RefObject<HTMLDivElement | null>
+  isGlobalSection?: boolean
+  globalWorkspaceId?: string
+  regularWorkspaces?: RegularWorkspace[]
 }
 
 /**
@@ -44,11 +54,17 @@ export function WorkflowList({
   setIsImporting,
   fileInputRef,
   scrollContainerRef,
+  isGlobalSection = false,
+  globalWorkspaceId,
+  regularWorkspaces = [],
 }: WorkflowListProps) {
   const pathname = usePathname()
   const params = useParams()
-  const workspaceId = params.workspaceId as string
+  const paramsWorkspaceId = params.workspaceId as string
   const workflowId = params.workflowId as string
+
+  // Use globalWorkspaceId if in global section, otherwise use the current workspace from params
+  const workspaceId = isGlobalSection && globalWorkspaceId ? globalWorkspaceId : paramsWorkspaceId
 
   const { isLoading: foldersLoading } = useFolders(workspaceId)
 
@@ -169,11 +185,14 @@ export function WorkflowList({
             active={isWorkflowActive(workflow.id)}
             level={level}
             onWorkflowClick={handleWorkflowClick}
+            isGlobalSection={isGlobalSection}
+            globalWorkspaceId={globalWorkspaceId}
+            regularWorkspaces={regularWorkspaces}
           />
         </div>
       </div>
     ),
-    [isWorkflowActive, createItemDragHandlers, handleWorkflowClick]
+    [isWorkflowActive, createItemDragHandlers, handleWorkflowClick, isGlobalSection, globalWorkspaceId, regularWorkspaces]
   )
 
   const renderFolderSection = useCallback(
@@ -292,6 +311,9 @@ export function WorkflowList({
               active={isWorkflowActive(workflow.id)}
               level={0}
               onWorkflowClick={handleWorkflowClick}
+              isGlobalSection={isGlobalSection}
+              globalWorkspaceId={globalWorkspaceId}
+              regularWorkspaces={regularWorkspaces}
             />
           ))}
         </div>

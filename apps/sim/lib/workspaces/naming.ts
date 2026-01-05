@@ -44,14 +44,14 @@ export function generateIncrementalName<T extends NameableEntity>(
 }
 
 /**
- * Generates the next workspace name
+ * Generates the next workspace name (displayed as "Agent" in the UI)
  */
 export async function generateWorkspaceName(): Promise<string> {
   const response = await fetch('/api/workspaces')
   const data = (await response.json()) as WorkspacesApiResponse
   const workspaces = data.workspaces || []
 
-  return generateIncrementalName(workspaces, 'Workspace')
+  return generateIncrementalName(workspaces, 'Agent')
 }
 
 /**

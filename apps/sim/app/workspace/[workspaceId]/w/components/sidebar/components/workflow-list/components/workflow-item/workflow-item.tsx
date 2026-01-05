@@ -2,11 +2,14 @@
 
 import { useCallback, useRef, useState } from 'react'
 import clsx from 'clsx'
+import { GitBranch, History } from 'lucide-react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { Tooltip } from '@/components/emcn'
 import { useUserPermissionsContext } from '@/app/workspace/[workspaceId]/providers/workspace-permissions-provider'
 import { ContextMenu } from '@/app/workspace/[workspaceId]/w/components/sidebar/components/workflow-list/components/context-menu/context-menu'
 import { DeleteModal } from '@/app/workspace/[workspaceId]/w/components/sidebar/components/workflow-list/components/delete-modal/delete-modal'
+import { WorkspaceSelectorModal } from '@/app/workspace/[workspaceId]/w/components/sidebar/components/global-workflows-section/components/workspace-selector-modal'
 import { Avatars } from '@/app/workspace/[workspaceId]/w/components/sidebar/components/workflow-list/components/workflow-item/avatars/avatars'
 import {
   useContextMenu,
@@ -23,11 +26,21 @@ import { useFolderStore } from '@/stores/folders/store'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 import type { WorkflowMetadata } from '@/stores/workflows/registry/types'
 
+interface RegularWorkspace {
+  id: string
+  name: string
+  ownerId: string
+  role?: string
+}
+
 interface WorkflowItemProps {
   workflow: WorkflowMetadata
   active: boolean
   level: number
   onWorkflowClick: (workflowId: string, shiftKey: boolean, metaKey: boolean) => void
+  isGlobalSection?: boolean
+  globalWorkspaceId?: string
+  regularWorkspaces?: RegularWorkspace[]
 }
 
 /**
@@ -37,9 +50,20 @@ interface WorkflowItemProps {
  * @param props - Component props
  * @returns Workflow item with drag and selection support
  */
-export function WorkflowItem({ workflow, active, level, onWorkflowClick }: WorkflowItemProps) {
+export function WorkflowItem({
+  workflow,
+  active,
+  level,
+  onWorkflowClick,
+  isGlobalSection = false,
+  globalWorkspaceId,
+  regularWorkspaces = [],
+}: WorkflowItemProps) {
   const params = useParams()
-  const workspaceId = params.workspaceId as string
+  const paramsWorkspaceId = params.workspaceId as string
+
+  // Use globalWorkspaceId if in global section for link navigation
+  const workspaceId = isGlobalSection && globalWorkspaceId ? globalWorkspaceId : paramsWorkspaceId
   const { selectedWorkflows } = useFolderStore()
   const { updateWorkflow, workflows } = useWorkflowRegistry()
   const userPermissions = useUserPermissionsContext()
@@ -56,6 +80,9 @@ export function WorkflowItem({ workflow, active, level, onWorkflowClick }: Workf
 
   // Presence avatars state
   const [hasAvatars, setHasAvatars] = useState(false)
+
+  // Workspace selector modal state for global workflows
+  const [isWorkspaceSelectorOpen, setIsWorkspaceSelectorOpen] = useState(false)
 
   // Capture selection at right-click time (using ref to persist across renders)
   const capturedSelectionRef = useRef<{
@@ -107,6 +134,29 @@ export function WorkflowItem({ workflow, active, level, onWorkflowClick }: Workf
   const handleOpenInNewTab = useCallback(() => {
     window.open(`/workspace/${workspaceId}/w/${workflow.id}`, '_blank')
   }, [workspaceId, workflow.id])
+
+  /**
+   * Opens the workspace selector modal for running global workflow in workspaces
+   */
+  const handleRunInWorkspaces = useCallback(() => {
+    setIsWorkspaceSelectorOpen(true)
+  }, [])
+
+  /**
+   * Fork the global workflow
+   */
+  const handleForkWorkflow = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  /**
+   * Show the commit graph/version history for the workflow
+   */
+  const handleShowCommitGraph = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
 
   /**
    * Drag start handler - handles workflow dragging with multi-selection support
@@ -308,6 +358,37 @@ export function WorkflowItem({ workflow, active, level, onWorkflowClick }: Workf
             </div>
           )}
         </div>
+        {/* Global workflow action icons */}
+        {!isEditing && isGlobalSection && (
+          <div className='flex items-center gap-[2px] opacity-0 group-hover:opacity-100 transition-opacity'>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  onClick={handleForkWorkflow}
+                  className='flex h-[18px] w-[18px] items-center justify-center rounded-[4px] hover:bg-[var(--surface-7)] dark:hover:bg-[var(--surface-6)]'
+                >
+                  <GitBranch className='h-[12px] w-[12px] text-[var(--text-tertiary)]' />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Content className='py-[2.5px]'>
+                <p>Fork workflow</p>
+              </Tooltip.Content>
+            </Tooltip.Root>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  onClick={handleShowCommitGraph}
+                  className='flex h-[18px] w-[18px] items-center justify-center rounded-[4px] hover:bg-[var(--surface-7)] dark:hover:bg-[var(--surface-6)]'
+                >
+                  <History className='h-[12px] w-[12px] text-[var(--text-tertiary)]' />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Content className='py-[2.5px]'>
+                <p>Version history</p>
+              </Tooltip.Content>
+            </Tooltip.Root>
+          </div>
+        )}
         {!isEditing && (
           <Avatars workflowId={workflow.id} maxVisible={3} onPresenceChange={setHasAvatars} />
         )}
@@ -320,11 +401,13 @@ export function WorkflowItem({ workflow, active, level, onWorkflowClick }: Workf
         menuRef={menuRef}
         onClose={closeMenu}
         onOpenInNewTab={handleOpenInNewTab}
+        onRunInWorkspaces={handleRunInWorkspaces}
         onRename={handleStartEdit}
         onDuplicate={handleDuplicateWorkflow}
         onExport={handleExportWorkflow}
         onDelete={handleOpenDeleteModal}
         showOpenInNewTab={selectedWorkflows.size <= 1}
+        showRunInWorkspaces={isGlobalSection && selectedWorkflows.size <= 1 && regularWorkspaces.length > 0}
         showRename={selectedWorkflows.size <= 1}
         showDuplicate={true}
         showExport={true}
@@ -343,6 +426,17 @@ export function WorkflowItem({ workflow, active, level, onWorkflowClick }: Workf
         itemType='workflow'
         itemName={deleteModalNames}
       />
+
+      {/* Workspace Selector Modal for Global Workflows */}
+      {isGlobalSection && (
+        <WorkspaceSelectorModal
+          isOpen={isWorkspaceSelectorOpen}
+          onClose={() => setIsWorkspaceSelectorOpen(false)}
+          workflowId={workflow.id}
+          workflowName={workflow.name}
+          workspaces={regularWorkspaces}
+        />
+      )}
     </>
   )
 }

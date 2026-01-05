@@ -48,10 +48,19 @@ interface ContextMenuProps {
    */
   onDelete: () => void
   /**
+   * Callback when run in workspaces is clicked (for global workflows)
+   */
+  onRunInWorkspaces?: () => void
+  /**
    * Whether to show the open in new tab option (default: false)
    * Set to true for items that can be opened in a new tab
    */
   showOpenInNewTab?: boolean
+  /**
+   * Whether to show the run in workspaces option (default: false)
+   * Set to true for global workflows that can be run across workspaces
+   */
+  showRunInWorkspaces?: boolean
   /**
    * Whether to show the rename option (default: true)
    * Set to false when multiple items are selected
@@ -128,7 +137,9 @@ export function ContextMenu({
   onDuplicate,
   onExport,
   onDelete,
+  onRunInWorkspaces,
   showOpenInNewTab = false,
+  showRunInWorkspaces = false,
   showRename = true,
   showCreate = false,
   showCreateFolder = false,
@@ -161,6 +172,16 @@ export function ContextMenu({
             }}
           >
             Open in new tab
+          </PopoverItem>
+        )}
+        {showRunInWorkspaces && onRunInWorkspaces && (
+          <PopoverItem
+            onClick={() => {
+              onRunInWorkspaces()
+              onClose()
+            }}
+          >
+            Run in workspaces...
           </PopoverItem>
         )}
         {showRename && onRename && (
