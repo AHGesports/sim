@@ -18,6 +18,11 @@ import type { BillingData, UsageData, UsageLimitInfo } from '@/lib/billing/types
 import { Decimal, toDecimal, toNumber } from '@/lib/billing/utils/decimal'
 import { isBillingEnabled } from '@/lib/core/config/feature-flags'
 import { getBaseUrl } from '@/lib/core/utils/urls'
+import {
+  createUserDbBudgetRecord,
+  createUserGlobalDatabaseRecord,
+  getUserGlobalDatabase,
+} from '@/lib/db/queries'
 import { sendEmail } from '@/lib/messaging/email/mailer'
 import { getEmailPreferences } from '@/lib/messaging/email/unsubscribe'
 
@@ -74,8 +79,9 @@ export async function getOrgUsageLimit(
 }
 
 /**
- * Handle new user setup when they join the platform
- * Creates userStats record with default free credits
+ * Handle new user setup when they join the platform.
+ * Creates userStats record with default free credits.
+ * Optionally creates a Neon global database if NEON_API_KEY is configured.
  */
 export async function handleNewUser(userId: string): Promise<void> {
   try {
@@ -87,12 +93,84 @@ export async function handleNewUser(userId: string): Promise<void> {
     })
 
     logger.info('User stats record created for new user', { userId })
+
+    // Create Neon global database if API key is configured
+    await initializeUserNeonDatabase(userId)
   } catch (error) {
     logger.error('Failed to create user stats record for new user', {
       userId,
       error,
     })
     throw error
+  }
+}
+
+/**
+ * Initializes Neon database resources for a new user.
+ * Creates a global database and budget record.
+ * Fails silently if NEON_API_KEY is not configured.
+ */
+async function initializeUserNeonDatabase(userId: string): Promise<void> {
+  const neonApiKey = process.env.NEON_API_KEY
+
+  if (!neonApiKey) {
+    logger.info('Skipping Neon database creation: NEON_API_KEY not configured', { userId })
+    return
+  }
+
+  try {
+    const { createUserGlobalDatabase } = await import('@/lib/neon')
+
+    const neonResult = await createUserGlobalDatabase(userId)
+
+    await createUserGlobalDatabaseRecord({ userId, neonResult })
+    await createUserDbBudgetRecord(userId)
+
+    logger.info('Neon global database created for new user', {
+      userId,
+      projectId: neonResult.projectId,
+    })
+  } catch (error) {
+    // Log error but don't fail user registration
+    logger.error('Failed to create Neon global database for new user', {
+      userId,
+      error,
+    })
+  }
+}
+
+/**
+ * Handle user deletion cleanup.
+ * Deletes the user's global Neon database if it was platform-owned.
+ * Called before the user record is deleted (CASCADE will handle DB records).
+ */
+export async function handleUserDeletion(userId: string): Promise<void> {
+  try {
+    const globalDb = await getUserGlobalDatabase(userId)
+
+    if (!globalDb?.neonProjectId) {
+      logger.info('No global database to clean up for user', { userId })
+      return
+    }
+
+    if (globalDb.ownershipType !== 'platform') {
+      logger.info('Skipping user-owned database cleanup', { userId })
+      return
+    }
+
+    const { deleteNeonProject } = await import('@/lib/neon')
+    await deleteNeonProject(globalDb.neonProjectId)
+
+    logger.info('Deleted Neon global database for user', {
+      userId,
+      projectId: globalDb.neonProjectId,
+    })
+  } catch (error) {
+    // Log error but don't fail user deletion
+    logger.error('Failed to delete Neon global database for user', {
+      userId,
+      error,
+    })
   }
 }
 

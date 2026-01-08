@@ -5,6 +5,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
+import { createWorkspaceDatabaseRecord } from '@/lib/db/queries'
 import { buildDefaultWorkflowArtifacts } from '@/lib/workflows/defaults'
 import { saveWorkflowToNormalizedTables } from '@/lib/workflows/persistence/utils'
 import { getOrCreateGlobalWorkspace } from '@/lib/workspaces/global'
@@ -202,6 +203,11 @@ async function createWorkspace(userId: string, name: string) {
     throw error
   }
 
+  // Create Neon agent database for this workspace (async, non-blocking)
+  initializeWorkspaceNeonDatabase(workspaceId).catch((error) => {
+    logger.error(`Background Neon database creation failed for workspace ${workspaceId}:`, error)
+  })
+
   // Return the workspace data directly instead of querying again
   return {
     id: workspaceId,
@@ -212,6 +218,39 @@ async function createWorkspace(userId: string, name: string) {
     createdAt: now,
     updatedAt: now,
     role: 'owner',
+  }
+}
+
+/**
+ * Initializes a Neon agent database for a workspace.
+ * Fails silently if NEON_API_KEY is not configured.
+ */
+async function initializeWorkspaceNeonDatabase(workspaceId: string): Promise<void> {
+  const neonApiKey = process.env.NEON_API_KEY
+
+  if (!neonApiKey) {
+    logger.info('Skipping Neon agent database creation: NEON_API_KEY not configured', {
+      workspaceId,
+    })
+    return
+  }
+
+  try {
+    const { createAgentDatabase } = await import('@/lib/neon')
+
+    const neonResult = await createAgentDatabase(workspaceId)
+
+    await createWorkspaceDatabaseRecord({ workspaceId, neonResult })
+
+    logger.info('Neon agent database created for workspace', {
+      workspaceId,
+      projectId: neonResult.projectId,
+    })
+  } catch (error) {
+    logger.error('Failed to create Neon agent database for workspace', {
+      workspaceId,
+      error,
+    })
   }
 }
 

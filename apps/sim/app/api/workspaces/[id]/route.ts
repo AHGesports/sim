@@ -1,15 +1,14 @@
-import { workflow } from '@sim/db/schema'
+import { db } from '@sim/db'
+import { knowledgeBase, permissions, templates, workflow, workspace } from '@sim/db/schema'
 import { createLogger } from '@sim/logger'
 import { and, eq, inArray } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
+import { getWorkspaceDatabase } from '@/lib/db/queries'
+import { getUserEntityPermissions } from '@/lib/workspaces/permissions/utils'
 
 const logger = createLogger('WorkspaceByIdAPI')
-
-import { db } from '@sim/db'
-import { knowledgeBase, permissions, templates, workspace } from '@sim/db/schema'
-import { getUserEntityPermissions } from '@/lib/workspaces/permissions/utils'
 
 const patchWorkspaceSchema = z.object({
   name: z.string().trim().min(1).optional(),
@@ -228,6 +227,9 @@ export async function DELETE(
       `Deleting workspace ${workspaceId} for user ${session.user.id}, deleteTemplates: ${deleteTemplates}`
     )
 
+    // Look up workspace database record before deletion (for Neon cleanup)
+    const workspaceDb = await getWorkspaceDatabase(workspaceId)
+
     // Delete workspace and all related data in a transaction
     await db.transaction(async (tx) => {
       // Get all workflows in this workspace before deletion
@@ -276,10 +278,18 @@ export async function DELETE(
         .where(and(eq(permissions.entityType, 'workspace'), eq(permissions.entityId, workspaceId)))
 
       // Delete the workspace itself
+      // Note: workspace_database record is deleted by CASCADE
       await tx.delete(workspace).where(eq(workspace.id, workspaceId))
 
       logger.info(`Successfully deleted workspace ${workspaceId} and all related data`)
     })
+
+    // Delete Neon project if it was platform-owned (after transaction succeeds)
+    if (workspaceDb?.neonProjectId && workspaceDb.ownershipType === 'platform') {
+      deleteWorkspaceNeonProject(workspaceDb.neonProjectId, workspaceId).catch((error) => {
+        logger.error(`Background Neon project deletion failed for workspace ${workspaceId}:`, error)
+      })
+    }
 
     return NextResponse.json({ success: true })
   } catch (error) {
@@ -291,4 +301,21 @@ export async function DELETE(
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // Reuse the PATCH handler implementation for PUT requests
   return PATCH(request, { params })
+}
+
+/**
+ * Deletes a Neon project associated with a workspace.
+ */
+async function deleteWorkspaceNeonProject(projectId: string, workspaceId: string): Promise<void> {
+  try {
+    const { deleteNeonProject } = await import('@/lib/neon')
+    await deleteNeonProject(projectId)
+    logger.info('Deleted Neon project for workspace', { projectId, workspaceId })
+  } catch (error) {
+    logger.error('Failed to delete Neon project for workspace', {
+      projectId,
+      workspaceId,
+      error,
+    })
+  }
 }

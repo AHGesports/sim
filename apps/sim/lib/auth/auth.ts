@@ -24,7 +24,7 @@ import {
 } from '@/components/emails/render-email'
 import { sendPlanWelcomeEmail } from '@/lib/billing'
 import { authorizeSubscriptionReference } from '@/lib/billing/authorization'
-import { handleNewUser } from '@/lib/billing/core/usage'
+import { handleNewUser, handleUserDeletion } from '@/lib/billing/core/usage'
 import {
   ensureOrganizationForTeamSubscription,
   syncSubscriptionUsageLimits,
@@ -100,6 +100,22 @@ export const auth = betterAuth({
             await handleNewUser(user.id)
           } catch (error) {
             logger.error('[databaseHooks.user.create.after] Failed to initialize user stats', {
+              userId: user.id,
+              error,
+            })
+          }
+        },
+      },
+      delete: {
+        before: async (user: { id: string }) => {
+          logger.info('[databaseHooks.user.delete.before] Cleaning up user resources', {
+            userId: user.id,
+          })
+
+          try {
+            await handleUserDeletion(user.id)
+          } catch (error) {
+            logger.error('[databaseHooks.user.delete.before] Failed to clean up user resources', {
               userId: user.id,
               error,
             })
