@@ -146,3 +146,23 @@ Set `active_time_seconds` to enforce daily/monthly compute limits:
 - Paid: 36,000 seconds (10 hours/day)
 
 When quota is exceeded, compute suspends until next period.
+
+---
+
+## Relationship to Cost Tracking
+
+**This document** (02-COST-OPTIMIZATION.md) covers **infrastructure cost optimization**:
+- How to configure Neon projects to minimize consumption
+- Autoscaling settings, suspend timeouts, compute limits
+- Direct impact on our Neon bill
+
+**Cost Tracking** (07-COST-TRACKING.md) covers **user budget enforcement**:
+- How we track consumption and calculate costs
+- How we enforce per-user budget limits
+- User-facing cost breakdown and billing
+
+**These work together:**
+1. Optimization strategies (here) → Lower consumption
+2. Lower consumption → Lower costs calculated by cost tracking
+3. Cost tracking → Enforces user budgets on actual usage
+4. Users stay within their plan limits while getting flexible resources

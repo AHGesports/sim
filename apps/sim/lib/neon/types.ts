@@ -4,6 +4,13 @@
  */
 
 /**
+ * Database ownership type - matches db_ownership_type enum in schema.
+ * - 'platform': We manage the Neon project
+ * - 'user': User connects their own database (future)
+ */
+export type DbOwnershipType = 'platform' | 'user'
+
+/**
  * Result from creating a new Neon database project.
  */
 export interface NeonDatabaseResult {

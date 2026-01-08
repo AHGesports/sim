@@ -1,5 +1,23 @@
 # Cost Tracking & Budget Enforcement
 
+## DRY Integration with Existing Billing
+
+**This document integrates with `lib/billing/` (NOT a separate system):**
+- ✅ Uses existing plan tiers (`lib/billing/plans.ts`)
+- ✅ Uses existing budget limits (`lib/billing/constants.ts`)
+- ✅ Uses existing billing periods (Stripe subscription cycles)
+- ✅ Extends existing usage API (`lib/billing/client/usage-visualization.ts`)
+- ✅ Integrates with existing cron (`app/api/cron/billing-sync/route.ts`)
+- ✅ Follows existing patterns (`lib/billing/storage/tracking.ts`)
+
+**New files to create:**
+- `lib/neon/consumption-tracking.ts` - DB cost sync (follows `lib/billing/storage/tracking.ts` pattern)
+- `lib/neon/pricing.ts` - Neon pricing constants and cost calculation
+
+**Files to extend:**
+- `lib/billing/core/budget-enforcement.ts` - Add `getDbUsageCost()` to total budget check
+- `lib/billing/client/usage-visualization.ts` - Add DB breakdown to UsageBreakdown interface
+
 ## Overview
 
 Instead of hard resource quotas, we use a **cost-budget model**:
@@ -36,30 +54,42 @@ TOTAL: $2.00 (100% of budget)
 
 ---
 
-## Budget Tiers
+## Budget Limits
+
+**Uses existing plan limits** (`lib/billing/constants.ts` - unchanged):
 
 ```typescript
-// lib/neon/budgets.ts
-export const USER_DB_BUDGETS = {
-  // TOTAL budget per user (covers global DB + ALL agent DBs combined)
-  free: 2.00,       // $2/month total for free users
-  paid: 20.00,      // $20/month total for paid users
-  enterprise: 100.00,  // $100/month for enterprise
-} as const;
+export const DEFAULT_FREE_CREDITS = 20        // $20/month TOTAL (AI + Storage + DB)
+export const DEFAULT_PRO_TIER_COST_LIMIT = 20
+export const DEFAULT_TEAM_TIER_COST_LIMIT = 40
+export const DEFAULT_ENTERPRISE_TIER_COST_LIMIT = 200
 ```
+
+**DB costs count toward the same overall limit:**
+- Free: $20/month total → user can use $15 AI + $3 Storage + $2 DB (or any combination)
+- Pro: $20/month total → user can use $10 AI + $5 Storage + $5 DB (or any combination)
+- Budget enforcement triggers when **AI + Storage + DB ≥ limit**
 
 ---
 
-## Neon Pricing
+## Neon Consumption Metrics (NOT Costs)
 
+**IMPORTANT**: Neon's API returns **raw consumption metrics only**, NOT dollar costs.
+
+Neon does NOT provide:
+- ❌ Cost calculation API endpoints
+- ❌ Current pricing rates via API
+- ❌ Dollar amounts in consumption responses
+
+**What Neon provides**:
 ```typescript
-// lib/neon/pricing.ts
-export const NEON_PRICING = {
-  // Scale plan pricing (approximate)
-  compute_per_cu_hour: 0.16,      // $0.16 per CU-hour
-  storage_per_gb_month: 0.024,    // $0.024 per GB-month
-  data_transfer_per_gb: 0.09,     // $0.09 per GB
-} as const;
+// Response from GET /v2/consumption_history/projects
+interface NeonConsumptionMetrics {
+  active_time_seconds: number           // Compute active time
+  compute_time_seconds: number          // CPU seconds used
+  written_data_bytes: number            // Data written
+  synthetic_storage_size_bytes: number  // Storage size
+}
 ```
 
 ---
@@ -73,9 +103,8 @@ CREATE TABLE user_db_budget (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
 
-  -- Budget configuration
-  budget_tier TEXT NOT NULL DEFAULT 'free',  -- 'free' | 'paid' | 'enterprise' | 'custom'
-  custom_budget_cents INTEGER,               -- For custom budgets
+  -- Budget configuration (tier derived from user's subscription plan)
+  custom_budget_cents INTEGER,               -- Override for special cases
 
   -- Status
   budget_exceeded BOOLEAN NOT NULL DEFAULT FALSE,
@@ -104,46 +133,80 @@ last_consumption_sync TIMESTAMP,
 
 ---
 
-## Cost Calculation
+## Cost Calculation Approach
+
+Since Neon doesn't provide cost calculation APIs, we use **environment-based pricing**:
 
 ```typescript
-// lib/neon/consumption.ts
-import { NEON_PRICING } from './pricing';
-
-interface NeonConsumption {
-  compute_time_seconds: number;
-  synthetic_storage_size_bytes: number;
-  data_transfer_bytes: number;
+// lib/neon/pricing.ts
+export function getNeonPricing() {
+  return {
+    // Default to current Neon pricing (as of 2025)
+    // TODO: Future enhancement - migrate to database-stored pricing with admin UI
+    // This would allow runtime updates without redeploy and better audit trail
+    computePerCuHour: parseFloat(
+      process.env.NEON_COMPUTE_PRICE_PER_CU_HOUR ?? '0.16'
+    ),
+    storagePerGbMonth: parseFloat(
+      process.env.NEON_STORAGE_PRICE_PER_GB_MONTH ?? '0.35'
+    ),
+  };
 }
 
-export function calculateDbCost(consumption: NeonConsumption): number {
-  const computeCost = (consumption.compute_time_seconds / 3600) * NEON_PRICING.compute_per_cu_hour;
-  const storageCost = (consumption.synthetic_storage_size_bytes / 1e9) * NEON_PRICING.storage_per_gb_month;
-  const transferCost = (consumption.data_transfer_bytes / 1e9) * NEON_PRICING.data_transfer_per_gb;
-  return computeCost + storageCost + transferCost;
+export function calculateDbCost(metrics: NeonConsumptionMetrics): number {
+  const pricing = getNeonPricing();
+  const computeCost = (metrics.compute_time_seconds / 3600) * pricing.computePerCuHour;
+  const storageCost = (metrics.synthetic_storage_size_bytes / 1e9) * pricing.storagePerGbMonth;
+  return computeCost + storageCost;
 }
 ```
+
+**Environment variables to add to `.env.example`:**
+```bash
+# Neon pricing (as of 2025-01 - update when Neon changes rates)
+# TODO: Future enhancement - migrate to database-stored pricing for runtime updates
+NEON_COMPUTE_PRICE_PER_CU_HOUR=0.16
+NEON_STORAGE_PRICE_PER_GB_MONTH=0.35
+```
+
+**Why environment variables now:**
+- Simple to implement and maintain
+- No additional database schema needed
+- Updates don't require code changes (just env var update + restart)
+- Works well for current scale
+
+**TODO - Future migration path:**
+When we need more sophisticated pricing management, migrate to database-stored pricing:
+- Create `neon_pricing` table with version history
+- Add admin UI for updating pricing
+- Support multiple pricing tiers or regional pricing
+- Better audit trail for pricing changes
+- No restart required for pricing updates
 
 ---
 
 ## Consumption Sync Flow
 
+**Integrates with existing billing cron** (`app/api/cron/billing-sync/route.ts`):
+
 ### Cron Job
 
 ```typescript
-// app/api/cron/sync-db-consumption/route.ts
+// app/api/cron/billing-sync/route.ts (EXTEND EXISTING)
 export async function GET(req: Request) {
-  // 1. Get all users with active databases
-  const users = await getUsersWithDatabases();
+  // Existing: Sync Stripe usage, AI costs, storage, etc.
 
+  // NEW: Sync DB consumption
+  const users = await getUsersWithDatabases();
   for (const user of users) {
-    await syncUserConsumption(user.id);
+    await syncUserDbConsumption(user.id);
   }
 
   return Response.json({ success: true });
 }
 
-async function syncUserConsumption(userId: string) {
+// lib/neon/consumption-tracking.ts (follows lib/billing/storage/tracking.ts pattern)
+async function syncUserDbConsumption(userId: string) {
   let totalCost = 0;
 
   // 1. Sync global DB consumption
@@ -178,23 +241,18 @@ async function syncUserConsumption(userId: string) {
     }
   }
 
-  // 3. Update user budget
-  const budgetConfig = await getUserDbBudget(userId);
-  const budgetLimit = getBudgetLimitCents(budgetConfig.budgetTier);
+  // 3. Update user DB budget tracking
   const totalCostCents = Math.round(totalCost * 100);
 
   await db.update(userDbBudget)
     .set({
       totalCostCents,
-      budgetExceeded: totalCostCents >= budgetLimit,
       lastSync: new Date(),
     })
     .where(eq(userDbBudget.userId, userId));
 
-  // 4. If budget exceeded, pause all projects
-  if (totalCostCents >= budgetLimit) {
-    await pauseUserProjects(userId);
-  }
+  // 4. Check TOTAL user budget (AI + Storage + DB)
+  await checkTotalUserBudget(userId);  // Uses lib/billing/core/budget-enforcement.ts
 }
 ```
 
@@ -202,11 +260,28 @@ async function syncUserConsumption(userId: string) {
 
 ## Budget Enforcement
 
-When budget is exceeded:
+**Unified budget enforcement** via `lib/billing/core/budget-enforcement.ts`:
 
 ```typescript
-async function pauseUserProjects(userId: string) {
-  // Get all user's Neon projects
+// lib/billing/core/budget-enforcement.ts (EXTEND EXISTING)
+export async function checkTotalUserBudget(userId: string): Promise<void> {
+  const [aiCost, storageCost, dbCost] = await Promise.all([
+    getAiUsageCost(userId),
+    getStorageUsageCost(userId),
+    getDbUsageCost(userId),  // NEW
+  ])
+
+  const totalCost = aiCost + storageCost + dbCost
+  const limit = await getUserLimit(userId)
+
+  if (totalCost >= limit) {
+    // Pause ALL services (not just DB)
+    await pauseUserServices(userId)
+  }
+}
+
+// lib/neon/consumption-tracking.ts
+async function pauseUserNeonProjects(userId: string) {
   const globalDb = await getUserGlobalDatabase(userId);
   const agentDbs = await getUserWorkspaceDatabases(userId);
 
@@ -230,54 +305,67 @@ async function pauseUserProjects(userId: string) {
 }
 ```
 
-**User sees**: "You've reached your database usage limit. Upgrade your plan or wait for next billing period."
+**User sees**: "You've reached your usage limit (AI: $X, Storage: $Y, Database: $Z). Upgrade or wait for next period."
 
 ---
 
 ## Cost Breakdown API
 
+**Extends existing usage API** (`lib/billing/client/usage-visualization.ts`):
+
 ```typescript
-// GET /api/users/[userId]/database/usage
+// lib/billing/client/usage-visualization.ts (EXTEND EXISTING)
+export interface UsageBreakdown {
+  // Existing
+  ai: number
+  storage: number
+  executions: number
+
+  // NEW: DB breakdown
+  database: {
+    total: number
+    global?: { name: string; costCents: number }
+    agents: Array<{ workspaceId: string; name: string; costCents: number }>
+  }
+}
+
+// GET /api/v1/users/[userId]/usage (EXTEND EXISTING)
 export async function GET(req: Request, { params }: { params: { userId: string } }) {
-  const budgetConfig = await getUserDbBudget(params.userId);
-  const globalDb = await getUserGlobalDatabase(params.userId);
-  const agentDbs = await getUserWorkspaceDatabases(params.userId);
+  const usage = await getUserUsageData(params.userId);  // Existing
 
-  const budgetLimitCents = getBudgetLimitCents(budgetConfig.budgetTier);
-
-  const breakdown = [];
-
-  // Global DB
-  if (globalDb) {
-    breakdown.push({
-      type: 'global',
-      name: 'Global DB',
-      costCents: globalDb.currentPeriodCostCents,
-    });
-  }
-
-  // Agent DBs
-  for (const agentDb of agentDbs) {
-    const workspace = await getWorkspace(agentDb.workspaceId);
-    breakdown.push({
-      type: 'agent',
-      workspaceId: agentDb.workspaceId,
-      name: workspace?.name ?? 'Unknown Agent',
-      costCents: agentDb.currentPeriodCostCents,
-    });
-  }
+  // NEW: Add DB breakdown
+  const dbBreakdown = await getDbUsageBreakdown(params.userId);
 
   return Response.json({
-    budget: {
-      tier: budgetConfig.budgetTier,
-      limitCents: budgetLimitCents,
-      usedCents: budgetConfig.totalCostCents,
-      exceeded: budgetConfig.budgetExceeded,
-    },
-    breakdown,
-    periodStart: budgetConfig.currentPeriodStart,
-    periodEnd: getNextPeriodStart(budgetConfig.currentPeriodStart),
+    ...usage,
+    database: dbBreakdown,
   });
+}
+
+// lib/neon/consumption-tracking.ts
+export async function getDbUsageBreakdown(userId: string) {
+  const globalDb = await getUserGlobalDatabase(userId);
+  const agentDbs = await getUserWorkspaceDatabases(userId);
+
+  const agents = [];
+  for (const agentDb of agentDbs) {
+    const workspace = await getWorkspace(agentDb.workspaceId);
+    agents.push({
+      workspaceId: agentDb.workspaceId,
+      name: workspace?.name ?? 'Unknown Agent',
+      costCents: agentDb.currentPeriodCostCents ?? 0,
+    });
+  }
+
+  return {
+    total: (globalDb?.currentPeriodCostCents ?? 0) +
+           agents.reduce((sum, a) => sum + a.costCents, 0),
+    global: globalDb ? {
+      name: 'Global DB',
+      costCents: globalDb.currentPeriodCostCents ?? 0
+    } : undefined,
+    agents,
+  };
 }
 ```
 
@@ -285,20 +373,27 @@ export async function GET(req: Request, { params }: { params: { userId: string }
 
 ```json
 {
-  "budget": {
-    "tier": "free",
-    "limitCents": 200,
-    "usedCents": 200,
-    "exceeded": true
-  },
-  "breakdown": [
-    { "type": "global", "name": "Global DB", "costCents": 45 },
-    { "type": "agent", "workspaceId": "ws-123", "name": "Sales Bot", "costCents": 82 },
-    { "type": "agent", "workspaceId": "ws-456", "name": "Support AI", "costCents": 23 },
-    { "type": "agent", "workspaceId": "ws-789", "name": "Data Sync", "costCents": 50 }
-  ],
+  "plan": "pro",
+  "limitCents": 2000,
+  "usedCents": 1750,
+  "percentUsed": 87.5,
+  "status": "warning",
   "periodStart": "2024-01-01T00:00:00Z",
-  "periodEnd": "2024-02-01T00:00:00Z"
+  "periodEnd": "2024-02-01T00:00:00Z",
+  "breakdown": {
+    "ai": { "costCents": 1230, "percent": 61.5 },
+    "storage": { "costCents": 320, "percent": 16.0 },
+    "database": {
+      "costCents": 200,
+      "percent": 10.0,
+      "global": { "name": "Global DB", "costCents": 45 },
+      "agents": [
+        { "workspaceId": "ws-123", "name": "Sales Bot", "costCents": 82 },
+        { "workspaceId": "ws-456", "name": "Support AI", "costCents": 23 },
+        { "workspaceId": "ws-789", "name": "Data Sync", "costCents": 50 }
+      ]
+    }
+  }
 }
 ```
 
@@ -306,21 +401,31 @@ export async function GET(req: Request, { params }: { params: { userId: string }
 
 ## UI Display
 
+**Unified usage dashboard** (extends existing UI):
+
 ```
-User Dashboard - Database Usage
+User Dashboard - Usage Breakdown
 ──────────────────────────────────────────────────────
-| Database           | This Month | % of Budget      |
+Overall Budget: $17.50 / $20.00 (87.5%)  [Pro Plan]
+
+| Category           | This Month | % of Budget      |
 |--------------------|------------|------------------|
-| Global DB          | $0.45      | 22.5%            |
-| Agent: Sales Bot   | $0.82      | 41.0%            |
-| Agent: Support AI  | $0.23      | 11.5%            |
-| Agent: Data Sync   | $0.50      | 25.0%            |
+| AI Usage           | $12.30     | 61.5%            |
+| Storage            | $3.20      | 16.0%            |
+| Database           | $2.00      | 10.0%            |
+│  ├─ Global DB      | $0.45      |  2.25%           |
+│  ├─ Sales Bot      | $0.82      |  4.1%            |
+│  ├─ Support AI     | $0.23      |  1.15%           |
+│  └─ Data Sync      | $0.50      |  2.5%            |
 ──────────────────────────────────────────────────────
-| TOTAL              | $2.00      | 100% of $2 limit |
+| TOTAL              | $17.50     | 87.5% of $20     |
 ──────────────────────────────────────────────────────
 
-[Upgrade Plan] to increase your database budget
+⚠️ You're approaching your limit
+[Upgrade to Team] for $40/month budget
 ```
+
+**Existing usage visualization** (`lib/billing/client/usage-visualization.ts`) extended with DB breakdown
 
 ---
 
@@ -348,25 +453,27 @@ await apiClient.createProject({
 
 ## Budget Period Reset
 
-Monthly billing period:
+**Uses existing billing period** (tied to Stripe subscription):
 
 ```typescript
-// lib/neon/budgets.ts
-export function getNextPeriodStart(currentStart: Date): Date {
-  const next = new Date(currentStart);
-  next.setMonth(next.getMonth() + 1);
-  return next;
+// lib/billing/core/usage.ts (EXTEND EXISTING)
+// Existing billing period reset already handles AI + Storage costs
+// Just need to add DB cost reset
+
+export async function resetUserBillingPeriod(userId: string) {
+  // Existing: Reset AI costs, storage costs, etc.
+
+  // NEW: Reset DB costs
+  await resetDbCosts(userId);
 }
 
-export async function resetBudgetPeriod(userId: string) {
-  const now = new Date();
-
-  // Reset user budget
+// lib/neon/consumption-tracking.ts
+export async function resetDbCosts(userId: string) {
+  // Reset user DB budget
   await db.update(userDbBudget)
     .set({
-      currentPeriodStart: now,
+      currentPeriodStart: new Date(),
       totalCostCents: 0,
-      budgetExceeded: false,
       lastSync: null,
     })
     .where(eq(userDbBudget.userId, userId));
@@ -384,8 +491,8 @@ export async function resetBudgetPeriod(userId: string) {
       .where(eq(workspaceDatabase.workspaceId, ws.id));
   }
 
-  // Resume paused projects
-  await resumeUserProjects(userId);
+  // Resume paused projects if previously exceeded
+  await resumeUserNeonProjects(userId);
 }
 ```
 

@@ -1784,7 +1784,6 @@ export const usageLog = pgTable(
 // ============================================================================
 
 export const dbOwnershipTypeEnum = pgEnum('db_ownership_type', ['platform', 'user'])
-export const dbBudgetTierEnum = pgEnum('db_budget_tier', ['free', 'paid', 'enterprise', 'custom'])
 
 /**
  * User Global Database - One shared database per user accessible by all their agents.
@@ -1857,7 +1856,8 @@ export const workspaceDatabase = pgTable(
 )
 
 /**
- * User DB Budget - User-level budget covering ALL databases (global + all agents).
+ * User DB Budget - User-level budget tracking for ALL databases (global + all agents).
+ * Budget limits are derived from user's subscription plan (free/pro/team/enterprise).
  * Created on user registration, deleted on user deletion.
  */
 export const userDbBudget = pgTable(
@@ -1869,9 +1869,8 @@ export const userDbBudget = pgTable(
       .references(() => user.id, { onDelete: 'cascade' })
       .unique(),
 
-    // Budget configuration
-    budgetTier: dbBudgetTierEnum('budget_tier').notNull().default('free'),
-    customBudgetCents: integer('custom_budget_cents'), // For custom budgets
+    // Custom budget override (cents) - if set, overrides plan-based limit
+    customBudgetCents: integer('custom_budget_cents'),
 
     // Status
     budgetExceeded: boolean('budget_exceeded').notNull().default(false),

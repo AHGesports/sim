@@ -59,7 +59,7 @@ user (existing)
     │       └── current_period_cost_cents
     │
     └── user_db_budget (1:1 - budget tracking per user)
-            ├── budget_tier ('free' | 'paid' | 'enterprise')
+            ├── (tier from user's subscription plan)
             ├── total_cost_cents (sum of all DBs)
             └── budget_exceeded (boolean)
 

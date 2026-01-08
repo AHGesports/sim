@@ -4,7 +4,7 @@
  */
 
 // Types
-export type { NeonDatabaseResult } from './types'
+export type { DbOwnershipType, NeonDatabaseResult } from './types'
 
 // Configuration
 export { NEON_PROJECT_DEFAULTS } from './config'

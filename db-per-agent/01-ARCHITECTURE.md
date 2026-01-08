@@ -121,9 +121,8 @@ CREATE TABLE user_db_budget (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
 
-  -- Budget configuration
-  budget_tier TEXT NOT NULL DEFAULT 'free',  -- 'free' | 'paid' | 'enterprise' | 'custom'
-  custom_budget_cents INTEGER,               -- For custom budgets
+  -- Budget configuration (tier derived from user's subscription plan)
+  custom_budget_cents INTEGER,               -- Override for special cases
 
   -- Status
   budget_exceeded BOOLEAN NOT NULL DEFAULT FALSE,
@@ -189,9 +188,9 @@ These fields are intentionally omitted - add only when implementing OAuth:
 │                 │         │    user_db_budget       │
 │                 │◄────────├─────────────────────────┤
 │                 │         │ user_id (FK)            │
-│                 │         │ budget_tier             │
 │                 │         │ total_cost_cents        │
 │                 │         │ budget_exceeded         │
+│                 │         │ (tier from subscription)│
 └─────────────────┘         └─────────────────────────┘
         │
         │ (via workspace.user_id)

@@ -3,7 +3,7 @@
 ## Phase 1: Database Schema & Neon Service ✅ COMPLETE
 
 ### Schema Changes ✅
-- [x] Add migration for new tables (`packages/db/migrations/0136_organic_rockslide.sql`):
+- [x] Add migration for new tables (`packages/db/migrations/0136_per_agent_databases.sql`):
 
 **user_global_database** (per-user global DB):
 ```sql
@@ -48,8 +48,9 @@ CREATE INDEX idx_workspace_database_workspace_id ON workspace_database(workspace
 CREATE TABLE user_db_budget (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-  budget_tier TEXT NOT NULL DEFAULT 'free',
-  custom_budget_cents INTEGER,
+  -- Budget tier is derived from user's subscription plan (free/pro/team/enterprise)
+  -- No budget_tier column - we look up the user's subscription instead
+  custom_budget_cents INTEGER,  -- Override for special cases
   budget_exceeded BOOLEAN NOT NULL DEFAULT FALSE,
   current_period_start TIMESTAMP NOT NULL DEFAULT NOW(),
   total_cost_cents INTEGER DEFAULT 0,
@@ -59,6 +60,7 @@ CREATE TABLE user_db_budget (
   UNIQUE(user_id)
 );
 CREATE INDEX idx_user_db_budget_user_id ON user_db_budget(user_id);
+CREATE INDEX idx_user_db_budget_exceeded ON user_db_budget(budget_exceeded);
 ```
 
 - [x] Add Drizzle schemas in `packages/db/schema.ts`:
@@ -93,6 +95,8 @@ CREATE INDEX idx_user_db_budget_user_id ON user_db_budget(user_id);
 - [x] Add `NEON_API_KEY` to `.env.example`
 - [x] Add `NEON_CONNECTION_ENCRYPTION_KEY` to `.env.example`
 - [x] Add encryption utility (`lib/encryption.ts`)
+- [x] Add `NEON_COMPUTE_PRICE_PER_CU_HOUR` to `.env.example` (default: 0.16)
+- [x] Add `NEON_STORAGE_PRICE_PER_GB_MONTH` to `.env.example` (default: 0.35)
 
 ---
 
@@ -133,7 +137,7 @@ CREATE INDEX idx_user_db_budget_user_id ON user_db_budget(user_id);
 - [ ] Workspace deletions cascade and trigger their own DB deletions
 
 ### On Tier Change
-- [ ] Update `budget_tier` in `user_db_budget` table
+- [ ] Budget tier is derived from user's subscription (no DB update needed)
 - [ ] If upgrading from exceeded state, resume paused projects
 - [ ] No need to update Neon settings (cost-budget model)
 
@@ -172,28 +176,46 @@ CREATE INDEX idx_user_db_budget_user_id ON user_db_budget(user_id);
 ## Phase 4: Cost Tracking & Budget Enforcement
 
 ### Add Files to lib/neon/
-- [ ] Add `pricing.ts` with Neon pricing constants ($/compute-hour, $/GB)
-- [ ] Add `budgets.ts` with budget tier limits
-- [ ] Add `consumption.ts` with cost calculation functions
+- [ ] Add `pricing.ts` - Environment-based pricing (getNeonPricing, calculateDbCost)
+  - Uses `NEON_COMPUTE_PRICE_PER_CU_HOUR` env var (default 0.16)
+  - Uses `NEON_STORAGE_PRICE_PER_GB_MONTH` env var (default 0.35)
+  - TODO comment: Future migration to database-stored pricing
+- [ ] Add `consumption-tracking.ts` - Consumption sync and cost tracking functions
+  - syncUserDbConsumption() - syncs all DBs for a user
+  - getDbUsageCost() - gets total DB cost for budget enforcement
+  - pauseUserNeonProjects() - sets quota to 0 when budget exceeded
+  - resumeUserNeonProjects() - restores quota when budget reset
+  - getDbUsageBreakdown() - returns cost breakdown for UI
 
 ### Consumption Sync
-- [ ] Create `app/api/cron/sync-db-consumption/route.ts`
-- [ ] Implement `syncUserConsumption()` function
-- [ ] Calculate costs using Neon pricing
-- [ ] Update `current_period_cost_cents` on each database table
-- [ ] Update `total_cost_cents` on `user_db_budget` table
-- [ ] Set `budget_exceeded` flag when limit reached
+- [ ] Extend existing `app/api/cron/billing-sync/route.ts` to call `syncUserDbConsumption()`
+- [ ] Implement `syncUserDbConsumption()` in `lib/neon/consumption-tracking.ts`:
+  - Fetch consumption from Neon API for all user's projects (global + agents)
+  - Calculate costs using `calculateDbCost()` from `lib/neon/pricing.ts`
+  - Update `current_period_cost_cents` on `user_global_database` table
+  - Update `current_period_cost_cents` on `workspace_database` table
+  - Update `total_cost_cents` on `user_db_budget` table
+  - Call `checkTotalUserBudget()` for unified budget enforcement (AI + Storage + DB)
 
 ### Budget Enforcement
-- [ ] Add `pauseNeonProject()` to `projects.ts` - set quota to 0
-- [ ] Add `resumeNeonProject()` to `projects.ts` - restore quota
-- [ ] Handle budget exceeded state in UI
+- [ ] Extend `lib/billing/core/budget-enforcement.ts`:
+  - Add `getDbUsageCost(userId)` to get total DB costs
+  - Update `checkTotalUserBudget()` to include DB costs in total
+  - Call `pauseUserServices()` when AI + Storage + DB >= limit
+- [ ] Implement `pauseUserNeonProjects()` in `lib/neon/consumption-tracking.ts`:
+  - Set quota to 0 on all user's Neon projects (global + agents)
+- [ ] Implement `resumeUserNeonProjects()` in `lib/neon/consumption-tracking.ts`:
+  - Restore quota on budget reset or plan upgrade
+- [ ] Handle budget exceeded state in UI with breakdown
 
 ### Cost Breakdown API
-- [ ] `GET /api/users/[userId]/database/usage` - Return cost breakdown
-- [ ] Include global DB cost
-- [ ] Include all agent DB costs
-- [ ] Include budget tier and limit
+- [ ] Extend `lib/billing/client/usage-visualization.ts`:
+  - Add `database` field to `UsageBreakdown` interface
+  - Include global DB cost breakdown
+  - Include all agent DB costs with workspace names
+  - Total DB costs rolled up into unified budget view
+- [ ] Extend `GET /api/v1/users/[userId]/usage` to include DB breakdown
+- [ ] Budget shows: AI + Storage + Database = Total (vs plan limit)
 
 ### UI Components
 - [ ] Database usage dashboard
@@ -202,9 +224,13 @@ CREATE INDEX idx_user_db_budget_user_id ON user_db_budget(user_id);
 - [ ] Upgrade plan CTA
 
 ### Budget Period Reset
-- [ ] Implement monthly period reset
-- [ ] Reset cost tracking on period change
-- [ ] Resume paused projects
+- [ ] Extend `lib/billing/core/usage.ts` `resetUserBillingPeriod()`:
+  - Call `resetDbCosts(userId)` from `lib/neon/consumption-tracking.ts`
+- [ ] Implement `resetDbCosts()`:
+  - Reset `user_db_budget` period start and total cost
+  - Reset `current_period_cost_cents` on `user_global_database`
+  - Reset `current_period_cost_cents` on all `workspace_database` records
+  - Resume paused projects via `resumeUserNeonProjects()`
 
 ---
 
@@ -352,11 +378,11 @@ CREATE INDEX idx_user_db_budget_user_id ON user_db_budget(user_id);
 
 | File | Purpose |
 |------|---------|
-| `apps/sim/lib/neon/pricing.ts` | Neon pricing constants |
-| `apps/sim/lib/neon/budgets.ts` | Budget tiers |
-| `apps/sim/lib/neon/consumption.ts` | Cost tracking |
-| `apps/sim/app/api/cron/sync-db-consumption/route.ts` | Consumption cron |
-| `apps/sim/app/api/users/[userId]/database/usage/route.ts` | Usage API |
+| `apps/sim/lib/neon/pricing.ts` | Environment-based pricing (with TODO for future DB migration) |
+| `apps/sim/lib/neon/consumption-tracking.ts` | Consumption sync, cost calculation, budget enforcement |
+| `apps/sim/lib/billing/core/budget-enforcement.ts` | EXTEND to add getDbUsageCost() |
+| `apps/sim/lib/billing/client/usage-visualization.ts` | EXTEND UsageBreakdown interface for DB costs |
+| `apps/sim/app/api/cron/billing-sync/route.ts` | EXTEND existing cron to call syncUserDbConsumption() |
 
 ---
 
