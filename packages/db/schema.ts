@@ -1778,3 +1778,115 @@ export const usageLog = pgTable(
     workflowIdIdx: index('usage_log_workflow_id_idx').on(table.workflowId),
   })
 )
+
+// ============================================================================
+// Per-Agent Database System
+// ============================================================================
+
+export const dbOwnershipTypeEnum = pgEnum('db_ownership_type', ['platform', 'user'])
+export const dbBudgetTierEnum = pgEnum('db_budget_tier', ['free', 'paid', 'enterprise', 'custom'])
+
+/**
+ * User Global Database - One shared database per user accessible by all their agents.
+ * Created on user registration, deleted on user deletion.
+ */
+export const userGlobalDatabase = pgTable(
+  'user_global_database',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' })
+      .unique(),
+
+    // Ownership: 'platform' (we manage) or 'user' (future: they connect own)
+    ownershipType: dbOwnershipTypeEnum('ownership_type').notNull().default('platform'),
+
+    // Neon project info (for platform-managed)
+    neonProjectId: text('neon_project_id'),
+    neonBranchId: text('neon_branch_id'),
+    neonConnectionUri: text('neon_connection_uri'), // Encrypted at rest
+    databaseName: text('database_name').notNull().default('neondb'),
+
+    // Per-project consumption tracking
+    currentPeriodCostCents: integer('current_period_cost_cents').notNull().default(0),
+    lastConsumptionSync: timestamp('last_consumption_sync'),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('user_global_database_user_id_idx').on(table.userId),
+  })
+)
+
+/**
+ * Workspace Database - One isolated database per workspace/agent.
+ * Created on workspace creation, deleted on workspace deletion.
+ */
+export const workspaceDatabase = pgTable(
+  'workspace_database',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' })
+      .unique(),
+
+    // Ownership: 'platform' (we manage) or 'user' (future: they connect own)
+    ownershipType: dbOwnershipTypeEnum('ownership_type').notNull().default('platform'),
+
+    // Neon project info (for platform-managed)
+    neonProjectId: text('neon_project_id'),
+    neonBranchId: text('neon_branch_id'),
+    neonConnectionUri: text('neon_connection_uri'), // Encrypted at rest
+    databaseName: text('database_name').notNull().default('neondb'),
+
+    // Per-project consumption tracking
+    currentPeriodCostCents: integer('current_period_cost_cents').notNull().default(0),
+    lastConsumptionSync: timestamp('last_consumption_sync'),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => ({
+    workspaceIdIdx: index('workspace_database_workspace_id_idx').on(table.workspaceId),
+  })
+)
+
+/**
+ * User DB Budget - User-level budget covering ALL databases (global + all agents).
+ * Created on user registration, deleted on user deletion.
+ */
+export const userDbBudget = pgTable(
+  'user_db_budget',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' })
+      .unique(),
+
+    // Budget configuration
+    budgetTier: dbBudgetTierEnum('budget_tier').notNull().default('free'),
+    customBudgetCents: integer('custom_budget_cents'), // For custom budgets
+
+    // Status
+    budgetExceeded: boolean('budget_exceeded').notNull().default(false),
+
+    // Total consumption tracking (sum of all DBs)
+    currentPeriodStart: timestamp('current_period_start').notNull().defaultNow(),
+    totalCostCents: integer('total_cost_cents').notNull().default(0),
+    lastSync: timestamp('last_sync'),
+
+    // Timestamps
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('user_db_budget_user_id_idx').on(table.userId),
+    budgetExceededIdx: index('user_db_budget_exceeded_idx').on(table.budgetExceeded),
+  })
+)

@@ -946,6 +946,13 @@
       "when": 1767363766601,
       "tag": "0135_loose_jane_foster",
       "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1767630960125,
+      "tag": "0136_organic_rockslide",
+      "breakpoints": true
     }
   ]
 }
