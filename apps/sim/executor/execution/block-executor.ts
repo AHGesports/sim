@@ -414,16 +414,25 @@ export class BlockExecutor {
     const tools = inputs.tools
     if (!Array.isArray(tools) || tools.length === 0) return inputs
 
-    const mcpTools = tools.filter((t: any) => t.type === 'mcp')
-    if (mcpTools.length === 0) return inputs
+    // Filter out internal/marker tools (legacy)
+    const validTools = tools.filter((t: any) => t.type !== 'internal')
+
+    const mcpTools = validTools.filter((t: any) => t.type === 'mcp')
+    if (mcpTools.length === 0) return { ...inputs, tools: validTools }
 
     const serverIds = [
       ...new Set(mcpTools.map((t: any) => t.params?.serverId).filter(Boolean)),
     ] as string[]
-    if (serverIds.length === 0) return inputs
+    if (serverIds.length === 0) return { ...inputs, tools: validTools }
 
-    const availableServerIds = new Set<string>()
-    if (ctx.workspaceId && serverIds.length > 0) {
+    // System MCP servers (system:*) are always available - they're virtual servers
+    const systemServerIds = serverIds.filter((id) => id.startsWith('system:'))
+    const userServerIds = serverIds.filter((id) => !id.startsWith('system:'))
+
+    const availableServerIds = new Set<string>(systemServerIds)
+
+    // Only check database for non-system servers
+    if (ctx.workspaceId && userServerIds.length > 0) {
       try {
         const servers = await db
           .select({ id: mcpServers.id, connectionStatus: mcpServers.connectionStatus })
@@ -431,7 +440,7 @@ export class BlockExecutor {
           .where(
             and(
               eq(mcpServers.workspaceId, ctx.workspaceId),
-              inArray(mcpServers.id, serverIds),
+              inArray(mcpServers.id, userServerIds),
               isNull(mcpServers.deletedAt)
             )
           )
@@ -442,12 +451,15 @@ export class BlockExecutor {
           }
         }
       } catch (error) {
-        logger.warn('Failed to check MCP server availability for logging:', error)
-        return inputs
+        logger.warn('[SystemMcp] Failed to check MCP server availability for logging:', error)
+        // On error, include all user servers to avoid filtering too aggressively
+        for (const serverId of userServerIds) {
+          availableServerIds.add(serverId)
+        }
       }
     }
 
-    const filteredTools = tools.filter((tool: any) => {
+    const filteredTools = validTools.filter((tool: any) => {
       if (tool.type !== 'mcp') return true
       const serverId = tool.params?.serverId
       if (!serverId) return false

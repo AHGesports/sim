@@ -9,7 +9,7 @@ export const NEON_PROJECT_DEFAULTS = {
   regionId: 'aws-us-east-1',
 
   /** Default database name (Neon default) */
-  databaseName: 'neondb',
+  databaseName: 'agentdb',
 
   /** Minimum compute units (scale to zero) */
   autoscalingMinCu: 0.25,
@@ -17,6 +17,11 @@ export const NEON_PROJECT_DEFAULTS = {
   /** Maximum compute units when active */
   autoscalingMaxCu: 2,
 
-  /** Seconds of inactivity before suspending (aggressive scale-to-zero) */
-  suspendTimeoutSeconds: 60,
+  /**
+   * Seconds of inactivity before suspending.
+   * NOTE: Free tier does NOT allow setting this parameter - Neon uses its default (5 minutes).
+   * Only paid plans can customize this value.
+   * Set to null to omit this parameter and use Neon's default.
+   */
+  suspendTimeoutSeconds: null as number | null,
 } as const

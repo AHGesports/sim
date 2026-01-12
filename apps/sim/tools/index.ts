@@ -960,7 +960,29 @@ async function executeMcpTool(
   try {
     logger.info(`[${actualRequestId}] Executing MCP tool: ${toolId}`)
 
-    const { serverId, toolName } = parseMcpToolId(toolId)
+    // Prefer serverId/toolName from params (preserves original values like system:postgres-agent)
+    // Fall back to parsing from toolId (which may have been sanitized, e.g., colons replaced with underscores)
+    let serverId: string
+    let toolName: string
+
+    if (params.serverId && params.toolName) {
+      serverId = params.serverId
+      toolName = params.toolName
+      logger.info(`[${actualRequestId}] [SystemMcp] Using serverId/toolName from params`, {
+        serverId,
+        toolName,
+        toolId,
+      })
+    } else {
+      const parsed = parseMcpToolId(toolId)
+      serverId = parsed.serverId
+      toolName = parsed.toolName
+      logger.debug(`[${actualRequestId}] Parsed serverId/toolName from toolId`, {
+        serverId,
+        toolName,
+        toolId,
+      })
+    }
 
     const baseUrl = getBaseUrl()
 

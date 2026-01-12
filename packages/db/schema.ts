@@ -1889,3 +1889,69 @@ export const userDbBudget = pgTable(
     budgetExceededIdx: index('user_db_budget_exceeded_idx').on(table.budgetExceeded),
   })
 )
+
+/**
+ * MCP Tool Schema Cache - Permanent cache for system MCP tool schemas.
+ * Populated via one-time discovery from postgres-mcp.
+ * Avoids opening DB connections just to show tool list in UI.
+ */
+export const mcpToolSchemaCache = pgTable(
+  'mcp_tool_schema_cache',
+  {
+    id: text('id').primaryKey(),
+
+    // Server type: 'postgres-agent' | 'postgres-global'
+    serverType: text('server_type').notNull(),
+
+    // Tool identification
+    toolName: text('tool_name').notNull(),
+
+    // Full tool schema (name, description, inputSchema)
+    toolSchema: jsonb('tool_schema').notNull(),
+
+    // When this schema was discovered
+    discoveredAt: timestamp('discovered_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    serverTypeToolNameIdx: uniqueIndex('mcp_tool_schema_cache_server_tool_idx').on(
+      table.serverType,
+      table.toolName
+    ),
+  })
+)
+
+/**
+ * Workspace System MCP Tool Config - Per-workspace tool enable/disable preferences.
+ * Controls which system MCP tools (postgres-agent, postgres-global) are available.
+ * By default, all tools are enabled. Only disabled tools are stored.
+ */
+export const workspaceSystemMcpToolConfig = pgTable(
+  'workspace_system_mcp_tool_config',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspace.id, { onDelete: 'cascade' }),
+
+    // Server ID: 'system:postgres-agent' | 'system:postgres-global'
+    serverId: text('server_id').notNull(),
+
+    // Tool name from the server
+    toolName: text('tool_name').notNull(),
+
+    // Whether this tool is enabled (false = disabled)
+    enabled: boolean('enabled').notNull().default(true),
+
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    // Unique constraint: one config per workspace+server+tool
+    workspaceServerToolIdx: uniqueIndex('workspace_system_mcp_tool_config_unique').on(
+      table.workspaceId,
+      table.serverId,
+      table.toolName
+    ),
+    // Query by workspace
+    workspaceIdIdx: index('workspace_system_mcp_tool_config_workspace_idx').on(table.workspaceId),
+  })
+)

@@ -144,9 +144,14 @@ export function getToolParametersConfig(
   blockType?: string
 ): ToolWithParameters | null {
   try {
+    // Skip internal/marker tools (legacy)
+    if (toolId.startsWith('_')) {
+      return null
+    }
+
     const toolConfig = getTool(toolId)
     if (!toolConfig) {
-      logger.warn(`Tool not found: ${toolId}`)
+      logger.warn(`[ToolsParams] Tool not found: ${toolId}`)
       return null
     }
 

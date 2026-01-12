@@ -5,7 +5,7 @@ import { mcpService } from '@/lib/mcp/service'
 import type { McpToolDiscoveryResponse } from '@/lib/mcp/types'
 import { categorizeError, createMcpErrorResponse, createMcpSuccessResponse } from '@/lib/mcp/utils'
 
-const logger = createLogger('McpToolDiscoveryAPI')
+const logger = createLogger('SystemMcp')
 
 export const dynamic = 'force-dynamic'
 

@@ -25,8 +25,20 @@ import {
 } from '@/lib/db/queries'
 import { sendEmail } from '@/lib/messaging/email/mailer'
 import { getEmailPreferences } from '@/lib/messaging/email/unsubscribe'
+import { sanitizeError } from '@/lib/neon/sanitize'
 
 const logger = createLogger('UsageManagement')
+
+/**
+ * Custom error thrown when Neon database initialization fails.
+ * Used to distinguish critical Neon errors from other errors.
+ */
+export class NeonInitializationError extends Error {
+  constructor(message: string, public readonly cause?: Error) {
+    super(message)
+    this.name = 'NeonInitializationError'
+  }
+}
 
 export interface OrgUsageLimitResult {
   limit: number
@@ -99,7 +111,7 @@ export async function handleNewUser(userId: string): Promise<void> {
   } catch (error) {
     logger.error('Failed to create user stats record for new user', {
       userId,
-      error,
+      error: sanitizeError(error),
     })
     throw error
   }
@@ -108,7 +120,9 @@ export async function handleNewUser(userId: string): Promise<void> {
 /**
  * Initializes Neon database resources for a new user.
  * Creates a global database and budget record.
+ * Triggers one-time schema discovery if this is the first database.
  * Fails silently if NEON_API_KEY is not configured.
+ * BLOCKS registration if NEON_API_KEY is configured but creation fails.
  */
 async function initializeUserNeonDatabase(userId: string): Promise<void> {
   const neonApiKey = process.env.NEON_API_KEY
@@ -130,12 +144,39 @@ async function initializeUserNeonDatabase(userId: string): Promise<void> {
       userId,
       projectId: neonResult.projectId,
     })
-  } catch (error) {
-    // Log error but don't fail user registration
-    logger.error('Failed to create Neon global database for new user', {
-      userId,
-      error,
+
+    // Trigger one-time schema discovery if not already done
+    // This populates mcp_tool_schema_cache for UI tool population
+    triggerMcpSchemaDiscovery(neonResult.projectId).catch((error) => {
+      logger.warn('Failed to trigger MCP schema discovery (non-blocking)', {
+        userId,
+        error,
+      })
     })
+  } catch (error) {
+    // If NEON_API_KEY is configured, Neon is REQUIRED - block registration on failure
+    logger.error('Failed to create Neon global database for new user (BLOCKING registration)', {
+      userId,
+      error: sanitizeError(error),
+    })
+    throw new NeonInitializationError(
+      `Failed to initialize database for new user. Neon is required but database creation failed: ${error instanceof Error ? error.message : String(error)}`,
+      error instanceof Error ? error : undefined
+    )
+  }
+}
+
+/**
+ * Trigger MCP schema discovery if not already cached.
+ * This is a non-blocking operation - it populates the cache for future use.
+ */
+async function triggerMcpSchemaDiscovery(projectId: string): Promise<void> {
+  try {
+    const { discoverAndCacheToolSchemas } = await import('@/lib/mcp/system-servers')
+    await discoverAndCacheToolSchemas(projectId)
+    logger.info('MCP schema discovery completed and cached')
+  } catch (error) {
+    logger.warn('MCP schema discovery failed (non-blocking)', { error: sanitizeError(error) })
   }
 }
 
@@ -169,7 +210,7 @@ export async function handleUserDeletion(userId: string): Promise<void> {
     // Log error but don't fail user deletion
     logger.error('Failed to delete Neon global database for user', {
       userId,
-      error,
+      error: sanitizeError(error),
     })
   }
 }
@@ -246,7 +287,7 @@ export async function getUserUsageData(userId: string): Promise<UsageData> {
       lastPeriodCost: toNumber(toDecimal(stats.lastPeriodCost)),
     }
   } catch (error) {
-    logger.error('Failed to get user usage data', { userId, error })
+    logger.error('Failed to get user usage data', { userId, error: sanitizeError(error) })
     throw error
   }
 }
@@ -299,7 +340,7 @@ export async function getUserUsageLimitInfo(userId: string): Promise<UsageLimitI
       updatedAt: stats.usageLimitUpdatedAt,
     }
   } catch (error) {
-    logger.error('Failed to get usage limit info', { userId, error })
+    logger.error('Failed to get usage limit info', { userId, error: sanitizeError(error) })
     throw error
   }
 }
@@ -399,7 +440,7 @@ export async function updateUserUsageLimit(
 
     return { success: true }
   } catch (error) {
-    logger.error('Failed to update usage limit', { userId, newLimit, error })
+    logger.error('Failed to update usage limit', { userId, newLimit, error: sanitizeError(error) })
     return { success: false, error: 'Failed to update usage limit' }
   }
 }
@@ -476,7 +517,7 @@ export async function checkUsageStatus(userId: string): Promise<{
       usageData,
     }
   } catch (error) {
-    logger.error('Failed to check usage status', { userId, error })
+    logger.error('Failed to check usage status', { userId, error: sanitizeError(error) })
     throw error
   }
 }
@@ -589,7 +630,7 @@ export async function getTeamUsageLimits(organizationId: string): Promise<
       lastActive: memberData.lastActive,
     }))
   } catch (error) {
-    logger.error('Failed to get team usage limits', { organizationId, error })
+    logger.error('Failed to get team usage limits', { organizationId, error: sanitizeError(error) })
     return []
   }
 }
@@ -676,7 +717,7 @@ export async function calculateBillingProjection(userId: string): Promise<Billin
       daysRemaining,
     }
   } catch (error) {
-    logger.error('Failed to calculate billing projection', { userId, error })
+    logger.error('Failed to calculate billing projection', { userId, error: sanitizeError(error) })
     throw error
   }
 }

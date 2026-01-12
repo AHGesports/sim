@@ -56,9 +56,11 @@ import {
   useCustomTools,
 } from '@/hooks/queries/custom-tools'
 import { useForceRefreshMcpTools, useMcpServers, useStoredMcpTools } from '@/hooks/queries/mcp'
+import { useSystemMcpServers, useSystemMcpTools } from '@/hooks/queries/system-mcp'
 import { useWorkflows } from '@/hooks/queries/workflows'
 import { useMcpTools } from '@/hooks/use-mcp-tools'
 import { getProviderFromModel, supportsToolUsageControl } from '@/providers/utils'
+import { useSocket } from '@/app/workspace/providers/socket-provider'
 import { useSettingsModalStore } from '@/stores/settings-modal/store'
 import { useSubBlockStore } from '@/stores/workflows/subblock/store'
 import {
@@ -69,6 +71,7 @@ import {
 } from '@/tools/params'
 
 const logger = createLogger('ToolInput')
+
 
 /**
  * Props for the ToolInput component
@@ -815,6 +818,7 @@ export function ToolInput({
   const params = useParams()
   const workspaceId = params.workspaceId as string
   const workflowId = params.workflowId as string
+  const { isConnected, currentWorkflowId } = useSocket()
   const [storeValue, setStoreValue] = useSubBlockValue(blockId, subBlockId)
   const [open, setOpen] = useState(false)
   const [customToolModalOpen, setCustomToolModalOpen] = useState(false)
@@ -833,6 +837,8 @@ export function ToolInput({
 
   const { data: mcpServers = [], isLoading: mcpServersLoading } = useMcpServers(workspaceId)
   const { data: storedMcpTools = [] } = useStoredMcpTools(workspaceId)
+  const { data: systemMcpTools = [], isLoading: systemMcpLoading } = useSystemMcpTools(workspaceId)
+  const { data: systemMcpServers = [] } = useSystemMcpServers(workspaceId)
   const forceRefreshMcpTools = useForceRefreshMcpTools()
   const openSettingsModal = useSettingsModalStore((state) => state.openModal)
   const mcpDataLoading = mcpLoading || mcpServersLoading
@@ -868,6 +874,12 @@ export function ToolInput({
 
       const serverId = tool.params?.serverId as string
       const toolName = tool.params?.toolName as string
+
+      // System MCP servers are always connected (virtual servers)
+      // Skip validation for them - they don't have real connection status
+      if (serverId?.startsWith('system:')) {
+        return null
+      }
 
       // Try to get fresh schema from DB (enables real-time updates after MCP refresh)
       const storedTool =
@@ -948,6 +960,58 @@ export function ToolInput({
 
     return 0
   }, [])
+
+  // Auto-populate system database servers on first load (only once per block)
+  // Wait for socket connection to ensure changes persist to database
+  const hasAutoPopulatedSystemServersRef = useRef(false)
+  useEffect(() => {
+    if (
+      isPreview ||
+      disabled ||
+      systemMcpLoading ||
+      systemMcpServers.length === 0 ||
+      !isConnected ||
+      !currentWorkflowId ||
+      hasAutoPopulatedSystemServersRef.current
+    ) {
+      return
+    }
+
+    // Check if any system servers are already selected
+    const hasSystemServers = selectedTools.some(
+      (tool) =>
+        tool.type === 'mcp' &&
+        tool.params?.serverId &&
+        (tool.params.serverId as string).startsWith('system:')
+    )
+
+    // If system servers are already present, don't auto-add
+    if (hasSystemServers) {
+      hasAutoPopulatedSystemServersRef.current = true
+      return
+    }
+
+    // Auto-add all available system database servers (not individual tools)
+    const newSystemServers: StoredTool[] = systemMcpServers.map((server) => ({
+      type: 'mcp',
+      title: server.name,
+      toolId: server.id,
+      params: {
+        serverId: server.id,
+        serverName: server.name,
+        isSystemServer: 'true',
+      },
+      isExpanded: false,
+      usageControl: 'auto',
+      schema: {
+        type: 'object',
+        description: server.description,
+      },
+    }))
+
+    hasAutoPopulatedSystemServersRef.current = true
+    setStoreValue([...selectedTools, ...newSystemServers])
+  }, [isPreview, disabled, systemMcpLoading, systemMcpServers, selectedTools, setStoreValue, isConnected, currentWorkflowId])
 
   const hasBackfilledRef = useRef(false)
   useEffect(() => {
@@ -1570,6 +1634,42 @@ export function ToolInput({
       })
     }
 
+    // System Database MCP section - show servers, not individual tools
+    if (systemMcpServers.length > 0) {
+      groups.push({
+        section: 'Database MCP',
+        items: systemMcpServers.map((server) => ({
+          label: server.name,
+          value: `system-server-${server.id}`,
+          iconElement: createToolIcon(
+            server.id === 'system:postgres-agent' ? 'var(--brand-primary-hex)' : '#3B82F6',
+            McpIcon
+          ),
+          onSelect: () => {
+            // Add the server as a single entry (all its tools are auto-available)
+            const newTool: StoredTool = {
+              type: 'mcp',
+              title: server.name,
+              toolId: server.id,
+              params: {
+                serverId: server.id,
+                serverName: server.name,
+                isSystemServer: 'true',
+              },
+              isExpanded: false,
+              usageControl: 'auto',
+              schema: {
+                type: 'object',
+                description: server.description,
+              },
+            }
+            handleMcpToolSelect(newTool, true)
+          },
+          disabled: isPreview || disabled,
+        })),
+      })
+    }
+
     // MCP Tools section
     if (availableMcpTools.length > 0) {
       groups.push({
@@ -1648,6 +1748,7 @@ export function ToolInput({
     setStoreValue,
     handleMcpToolSelect,
     handleSelectTool,
+    systemMcpServers,
   ])
 
   const toolRequiresOAuth = (toolId: string): boolean => {
@@ -2047,6 +2148,11 @@ export function ToolInput({
       {/* Selected Tools List */}
       {selectedTools.length > 0 &&
         selectedTools.map((tool, toolIndex) => {
+          // Skip internal tools (legacy markers from old workflows)
+          if (tool.type === 'internal') {
+            return null
+          }
+
           // Handle custom tools and MCP tools differently
           const isCustomTool = tool.type === 'custom-tool'
           const isMcpTool = tool.type === 'mcp'
@@ -2174,7 +2280,11 @@ export function ToolInput({
                       backgroundColor: isCustomTool
                         ? '#3B82F6'
                         : isMcpTool
-                          ? mcpTool?.bgColor || '#6366F1'
+                          ? tool.params?.serverId === 'system:postgres-agent'
+                            ? 'var(--brand-primary-hex)' // Brand color for Agent Database
+                            : tool.params?.serverId === 'system:postgres-global'
+                              ? '#3B82F6' // Blue for Globally Shared Database
+                              : mcpTool?.bgColor || '#6366F1'
                           : toolBlock?.bgColor,
                     }}
                   >

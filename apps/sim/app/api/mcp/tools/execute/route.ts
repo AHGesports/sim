@@ -2,7 +2,9 @@ import { createLogger } from '@sim/logger'
 import type { NextRequest } from 'next/server'
 import { getParsedBody, withMcpAuth } from '@/lib/mcp/middleware'
 import { mcpService } from '@/lib/mcp/service'
-import type { McpTool, McpToolCall, McpToolResult } from '@/lib/mcp/types'
+import { executeSystemMcpTool } from '@/lib/mcp/system-servers'
+import type { McpTool, McpToolCall, McpToolResult, SystemMcpServerId } from '@/lib/mcp/types'
+import { isSystemMcpServerId } from '@/lib/mcp/types'
 import {
   categorizeError,
   createMcpErrorResponse,
@@ -171,20 +173,54 @@ export const POST = withMcpAuth('read')(
         arguments: args,
       }
 
+      // Execute tool - route to system server handler if applicable
+      const executeToolFn = isSystemMcpServerId(serverId)
+        ? () => executeSystemMcpTool(userId, workspaceId, serverId as SystemMcpServerId, toolCall)
+        : () => mcpService.executeTool(userId, serverId, toolCall, workspaceId)
+
+      const executionStartTime = Date.now()
       const result = await Promise.race([
-        mcpService.executeTool(userId, serverId, toolCall, workspaceId),
+        executeToolFn(),
         new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Tool execution timeout')),
-            MCP_CONSTANTS.EXECUTION_TIMEOUT
-          )
+          setTimeout(() => {
+            const timeoutError = new Error('Tool execution timeout')
+            logger.error(`[${requestId}] Tool execution timeout after ${MCP_CONSTANTS.EXECUTION_TIMEOUT}ms`, {
+              toolName,
+              serverId,
+              timeoutMs: MCP_CONSTANTS.EXECUTION_TIMEOUT,
+              arguments: args,
+              isSystemServer: isSystemMcpServerId(serverId),
+            })
+            reject(timeoutError)
+          }, MCP_CONSTANTS.EXECUTION_TIMEOUT)
         ),
       ])
+      const executionDuration = Date.now() - executionStartTime
+
+      logger.info(`[${requestId}] Tool execution completed in ${executionDuration}ms`, {
+        toolName,
+        serverId,
+        durationMs: executionDuration,
+      })
 
       const transformedResult = transformToolResult(result)
 
       if (result.isError) {
-        logger.warn(`[${requestId}] Tool execution returned error for ${toolName} on ${serverId}`)
+        const errorContent = result.content?.map((c) => c.text).filter(Boolean).join(' ') || 'Unknown error'
+        const errorDetails = {
+          toolName,
+          serverId,
+          errorMessage: errorContent,
+          contentLength: result.content?.length || 0,
+          hasAdditionalData: Object.keys(result).length > 2, // more than content and isError
+          additionalFields: Object.keys(result).filter((k) => k !== 'content' && k !== 'isError'),
+        }
+
+        logger.warn(`[${requestId}] Tool execution returned error for ${toolName} on ${serverId}`, errorDetails)
+        logger.error(`[${requestId}] MCP Error Details: ${errorContent}`, {
+          fullResult: result,
+        })
+
         return createMcpErrorResponse(
           transformedResult,
           transformedResult.error || 'Tool execution failed',

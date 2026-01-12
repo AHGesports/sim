@@ -2,7 +2,7 @@
  * MCP Types - for connecting to external MCP servers
  */
 
-export type McpTransport = 'streamable-http'
+export type McpTransport = 'streamable-http' | 'stdio'
 
 export interface McpServerStatusConfig {
   consecutiveFailures: number
@@ -162,4 +162,86 @@ export interface StoredMcpToolReference {
 export interface StoredMcpTool extends StoredMcpToolReference {
   workflowId: string
   workflowName: string
+}
+
+/**
+ * System MCP server types - virtual servers managed by the platform.
+ * These are not stored in the mcpServers table.
+ */
+export type SystemMcpServerType = 'postgres-agent' | 'postgres-global'
+
+/**
+ * System MCP server IDs - prefixed with 'system:' to distinguish from user servers.
+ */
+export const SYSTEM_MCP_SERVER_IDS = {
+  POSTGRES_AGENT: 'system:postgres-agent',
+  POSTGRES_GLOBAL: 'system:postgres-global',
+} as const
+
+export type SystemMcpServerId = (typeof SYSTEM_MCP_SERVER_IDS)[keyof typeof SYSTEM_MCP_SERVER_IDS]
+
+/**
+ * System MCP server configuration.
+ * Virtual server that connects to Neon MCP via HTTP.
+ */
+export interface SystemMcpServer {
+  id: SystemMcpServerId
+  name: string
+  description: string
+  connectionStatus: 'connected' | 'disconnected' | 'error'
+  systemManaged: true
+  tools: McpTool[]
+  /** Neon project ID for this server - injected into tool calls automatically */
+  neonProjectId?: string
+}
+
+/**
+ * Neon MCP Server configuration.
+ * Uses Neon's hosted MCP server for database operations.
+ * @see https://neon.com/docs/ai/neon-mcp-server
+ */
+export const NEON_MCP_CONFIG = {
+  /** Neon MCP Streamable HTTP endpoint (POST-based, recommended) */
+  url: 'https://mcp.neon.tech/mcp',
+  /** Default timeout for HTTP requests (ms) */
+  timeout: 30000,
+  /** Number of retries on failure */
+  retries: 3,
+} as const
+
+/**
+ * Allowed SQL tools from Neon MCP.
+ * Only expose database query tools, not project management tools.
+ */
+export const NEON_MCP_ALLOWED_TOOLS = [
+  'run_sql',
+  'run_sql_transaction',
+  'list_tables',
+  'describe_table_schema',
+] as const
+
+export type NeonMcpAllowedTool = (typeof NEON_MCP_ALLOWED_TOOLS)[number]
+
+/**
+ * Check if a tool name is in the allowed list for system MCP servers.
+ */
+export function isAllowedNeonMcpTool(toolName: string): toolName is NeonMcpAllowedTool {
+  return NEON_MCP_ALLOWED_TOOLS.includes(toolName as NeonMcpAllowedTool)
+}
+
+/**
+ * Cached tool schema from one-time discovery.
+ * Stored in mcp_tool_schema_cache table.
+ */
+export interface CachedToolSchema {
+  name: string
+  description?: string
+  inputSchema: McpToolSchema
+}
+
+/**
+ * Check if a server ID is a system MCP server.
+ */
+export function isSystemMcpServerId(serverId: string): serverId is SystemMcpServerId {
+  return serverId.startsWith('system:')
 }

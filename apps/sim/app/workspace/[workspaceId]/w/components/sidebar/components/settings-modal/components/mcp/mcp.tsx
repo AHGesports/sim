@@ -32,6 +32,13 @@ import {
   useRefreshMcpServer,
   useStoredMcpTools,
 } from '@/hooks/queries/mcp'
+import {
+  useSystemMcpServers,
+  useSystemMcpToolConfig,
+  useUpdateSystemMcpToolConfig,
+} from '@/hooks/queries/system-mcp'
+import { isSystemMcpServerId, SYSTEM_MCP_SERVER_IDS } from '@/lib/mcp/types'
+import { McpIcon } from '@/components/icons'
 import { useMcpServerTest } from '@/hooks/use-mcp-server-test'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 import { useSubBlockStore } from '@/stores/workflows/subblock/store'
@@ -59,6 +66,8 @@ interface McpServer {
   connectionStatus?: 'connected' | 'disconnected' | 'error'
   lastError?: string | null
   lastConnected?: string
+  systemManaged?: boolean
+  description?: string
 }
 
 const logger = createLogger('McpSettings')
@@ -97,10 +106,26 @@ export function MCP({ initialServerId }: MCPProps) {
   const workspaceId = params.workspaceId as string
 
   const {
-    data: servers = [],
+    data: userServers = [],
     isLoading: serversLoading,
     error: serversError,
   } = useMcpServers(workspaceId)
+  const { data: systemServers = [] } = useSystemMcpServers(workspaceId)
+  const { data: toolConfig = [] } = useSystemMcpToolConfig(workspaceId)
+  const updateToolConfigMutation = useUpdateSystemMcpToolConfig()
+
+  // Merge system servers (first) with user servers
+  const servers: McpServer[] = useMemo(() => {
+    const sysServers = systemServers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      connectionStatus: s.connectionStatus,
+      systemManaged: s.systemManaged,
+    }))
+    return [...sysServers, ...userServers]
+  }, [systemServers, userServers])
+
   const {
     data: mcpToolsData = [],
     error: toolsError,
@@ -352,9 +377,11 @@ export function MCP({ initialServerId }: MCPProps) {
 
   /**
    * Groups tools by their server ID for display.
+   * Includes both user MCP tools and system server tools.
    */
   const toolsByServer = useMemo(() => {
-    return (mcpToolsData || []).reduce(
+    // Start with user MCP tools
+    const result = (mcpToolsData || []).reduce(
       (acc, tool) => {
         if (!tool?.serverId) return acc
         if (!acc[tool.serverId]) {
@@ -365,7 +392,14 @@ export function MCP({ initialServerId }: MCPProps) {
       },
       {} as Record<string, typeof mcpToolsData>
     )
-  }, [mcpToolsData])
+
+    // Add system server tools
+    for (const sysServer of systemServers) {
+      result[sysServer.id] = sysServer.tools || []
+    }
+
+    return result
+  }, [mcpToolsData, systemServers])
 
   /**
    * Filters servers based on search term.
@@ -543,9 +577,48 @@ export function MCP({ initialServerId }: MCPProps) {
     [storedTools, servers, mcpToolsData]
   )
 
+  /**
+   * Handles toggling a tool's enabled state for system servers.
+   */
+  const handleToolToggle = useCallback(
+    async (serverId: string, toolName: string, enabled: boolean) => {
+      try {
+        await updateToolConfigMutation.mutateAsync({
+          workspaceId,
+          serverId,
+          tools: [{ toolName, enabled }],
+        })
+        logger.info(`Tool ${toolName} ${enabled ? 'enabled' : 'disabled'} on ${serverId}`)
+      } catch (error) {
+        logger.error('Failed to update tool config:', error)
+      }
+    },
+    [updateToolConfigMutation, workspaceId]
+  )
+
+  /**
+   * Checks if a tool is enabled based on config.
+   * Default is enabled (true) unless explicitly disabled.
+   */
+  const isToolEnabled = useCallback(
+    (serverId: string, toolName: string): boolean => {
+      const config = toolConfig.find((c) => c.serverId === serverId && c.toolName === toolName)
+      return config?.enabled !== false
+    },
+    [toolConfig]
+  )
+
+  // Get icon color for system servers
+  const getSystemServerIconColor = (serverId: string) => {
+    if (serverId === SYSTEM_MCP_SERVER_IDS.POSTGRES_AGENT) return 'var(--brand-primary-hex)'
+    if (serverId === SYSTEM_MCP_SERVER_IDS.POSTGRES_GLOBAL) return '#3B82F6'
+    return '#6366F1' // Default purple for other system servers
+  }
+
   if (selectedServer) {
     const { server, tools } = selectedServer
     const transportLabel = formatTransportLabel(server.transport || 'http')
+    const isSystemServer = server.systemManaged === true
 
     return (
       <div className='flex h-full flex-col gap-[16px]'>
@@ -555,17 +628,45 @@ export function MCP({ initialServerId }: MCPProps) {
               <span className='font-medium text-[13px] text-[var(--text-primary)]'>
                 Server Name
               </span>
-              <p className='text-[14px] text-[var(--text-secondary)]'>
-                {server.name || 'Unnamed Server'}
-              </p>
+              <div className='flex items-center gap-[8px]'>
+                {isSystemServer && (
+                  <div
+                    className='flex h-[24px] w-[24px] flex-shrink-0 items-center justify-center rounded-[5px]'
+                    style={{ backgroundColor: getSystemServerIconColor(server.id) }}
+                  >
+                    <McpIcon className='h-[15px] w-[15px] text-white' />
+                  </div>
+                )}
+                <p className='text-[14px] text-[var(--text-secondary)]'>
+                  {server.name || 'Unnamed Server'}
+                </p>
+                {isSystemServer && (
+                  <Badge variant='gray-secondary' size='sm'>
+                    System
+                  </Badge>
+                )}
+              </div>
             </div>
 
-            <div className='flex flex-col gap-[8px]'>
-              <span className='font-medium text-[13px] text-[var(--text-primary)]'>Transport</span>
-              <p className='text-[14px] text-[var(--text-secondary)]'>{transportLabel}</p>
-            </div>
+            {server.description && (
+              <div className='flex flex-col gap-[8px]'>
+                <span className='font-medium text-[13px] text-[var(--text-primary)]'>
+                  Description
+                </span>
+                <p className='text-[14px] text-[var(--text-secondary)]'>{server.description}</p>
+              </div>
+            )}
 
-            {server.url && (
+            {!isSystemServer && (
+              <div className='flex flex-col gap-[8px]'>
+                <span className='font-medium text-[13px] text-[var(--text-primary)]'>
+                  Transport
+                </span>
+                <p className='text-[14px] text-[var(--text-secondary)]'>{transportLabel}</p>
+              </div>
+            )}
+
+            {server.url && !isSystemServer && (
               <div className='flex flex-col gap-[8px]'>
                 <span className='font-medium text-[13px] text-[var(--text-primary)]'>URL</span>
                 <p className='break-all text-[14px] text-[var(--text-secondary)]'>{server.url}</p>
@@ -592,36 +693,60 @@ export function MCP({ initialServerId }: MCPProps) {
                   {tools.map((tool) => {
                     const issues = getStoredToolIssues(server.id, tool.name)
                     const affectedWorkflows = issues.map((i) => i.workflowName)
+                    const toolEnabled = isToolEnabled(server.id, tool.name)
+
                     return (
                       <div
                         key={tool.name}
                         className='rounded-[6px] border bg-[var(--surface-3)] px-[10px] py-[8px]'
                       >
-                        <div className='flex items-center gap-[8px]'>
-                          <p className='font-medium text-[13px] text-[var(--text-primary)]'>
-                            {tool.name}
-                          </p>
-                          {issues.length > 0 && (
-                            <Tooltip.Root>
-                              <Tooltip.Trigger asChild>
-                                <div>
-                                  <Badge
-                                    variant={getIssueBadgeVariant(issues[0].issue)}
-                                    size='sm'
-                                    className='cursor-help'
-                                  >
-                                    {getIssueBadgeLabel(issues[0].issue)}
-                                  </Badge>
-                                </div>
-                              </Tooltip.Trigger>
-                              <Tooltip.Content>
-                                Update in: {affectedWorkflows.join(', ')}
-                              </Tooltip.Content>
-                            </Tooltip.Root>
+                        <div className='flex items-center justify-between gap-[8px]'>
+                          <div className='flex items-center gap-[8px]'>
+                            <p
+                              className={`font-medium text-[13px] ${!toolEnabled ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'}`}
+                            >
+                              {tool.name}
+                            </p>
+                            {issues.length > 0 && (
+                              <Tooltip.Root>
+                                <Tooltip.Trigger asChild>
+                                  <div>
+                                    <Badge
+                                      variant={getIssueBadgeVariant(issues[0].issue)}
+                                      size='sm'
+                                      className='cursor-help'
+                                    >
+                                      {getIssueBadgeLabel(issues[0].issue)}
+                                    </Badge>
+                                  </div>
+                                </Tooltip.Trigger>
+                                <Tooltip.Content>
+                                  Update in: {affectedWorkflows.join(', ')}
+                                </Tooltip.Content>
+                              </Tooltip.Root>
+                            )}
+                          </div>
+                          {isSystemServer && (
+                            <label className='flex cursor-pointer items-center gap-[6px]'>
+                              <input
+                                type='checkbox'
+                                checked={toolEnabled}
+                                onChange={(e) =>
+                                  handleToolToggle(server.id, tool.name, e.target.checked)
+                                }
+                                className='h-[14px] w-[14px] cursor-pointer rounded border-[var(--border)] accent-[var(--accent)]'
+                                disabled={updateToolConfigMutation.isPending}
+                              />
+                              <span className='text-[12px] text-[var(--text-tertiary)]'>
+                                {toolEnabled ? 'Enabled' : 'Disabled'}
+                              </span>
+                            </label>
                           )}
                         </div>
                         {tool.description && (
-                          <p className='mt-[4px] text-[13px] text-[var(--text-tertiary)]'>
+                          <p
+                            className={`mt-[4px] text-[13px] ${!toolEnabled ? 'text-[var(--text-muted)]' : 'text-[var(--text-tertiary)]'}`}
+                          >
                             {tool.description}
                           </p>
                         )}
@@ -635,19 +760,23 @@ export function MCP({ initialServerId }: MCPProps) {
         </div>
 
         <div className='mt-auto flex items-center justify-between'>
-          <Button
-            onClick={() => handleRefreshServer(server.id)}
-            variant='default'
-            disabled={!!refreshingServers[server.id]}
-          >
-            {refreshingServers[server.id]?.status === 'refreshing'
-              ? 'Refreshing...'
-              : refreshingServers[server.id]?.status === 'refreshed'
-                ? refreshingServers[server.id].workflowsUpdated
-                  ? `Synced (${refreshingServers[server.id].workflowsUpdated} workflow${refreshingServers[server.id].workflowsUpdated === 1 ? '' : 's'})`
-                  : 'Refreshed'
-                : 'Refresh Tools'}
-          </Button>
+          {!isSystemServer ? (
+            <Button
+              onClick={() => handleRefreshServer(server.id)}
+              variant='default'
+              disabled={!!refreshingServers[server.id]}
+            >
+              {refreshingServers[server.id]?.status === 'refreshing'
+                ? 'Refreshing...'
+                : refreshingServers[server.id]?.status === 'refreshed'
+                  ? refreshingServers[server.id].workflowsUpdated
+                    ? `Synced (${refreshingServers[server.id].workflowsUpdated} workflow${refreshingServers[server.id].workflowsUpdated === 1 ? '' : 's'})`
+                    : 'Refreshed'
+                  : 'Refresh Tools'}
+            </Button>
+          ) : (
+            <div />
+          )}
           <Button onClick={handleBackToList} variant='tertiary'>
             Back
           </Button>
@@ -804,6 +933,7 @@ export function MCP({ initialServerId }: MCPProps) {
                     isDeleting={deletingServers.has(server.id)}
                     isLoadingTools={isLoadingTools}
                     isRefreshing={refreshingServers[server.id]?.status === 'refreshing'}
+                    isSystemManaged={server.systemManaged === true}
                     onRemove={() => handleRemoveServer(server.id, server.name || 'this server')}
                     onViewDetails={() => handleViewDetails(server.id)}
                   />

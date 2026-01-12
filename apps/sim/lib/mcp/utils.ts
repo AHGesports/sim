@@ -153,11 +153,16 @@ export function categorizeError(error: unknown): { message: string; status: numb
 }
 
 /**
- * Create standardized MCP tool ID from server ID and tool name
+ * Create standardized MCP tool ID from server ID and tool name.
+ * The result is sanitized to only contain characters valid for AI provider function names:
+ * alphanumeric, underscore, and hyphen (pattern: ^[a-zA-Z0-9_-]+$)
  */
 export function createMcpToolId(serverId: string, toolName: string): string {
   const normalizedServerId = isMcpTool(serverId) ? serverId : `${MCP.TOOL_PREFIX}${serverId}`
-  return `${normalizedServerId}-${toolName}`
+  const rawId = `${normalizedServerId}-${toolName}`
+  // Sanitize for AI provider function name requirements (OpenAI, Anthropic, Google, etc.)
+  // Only allow: a-z, A-Z, 0-9, underscore, hyphen
+  return rawId.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
 /**

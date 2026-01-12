@@ -30,6 +30,10 @@ sim-standalone.tar.gz
 .DS_Store
 *.pem
 
+# logs
+*.log
+log.log
+
 # env files
 .env
 *.env

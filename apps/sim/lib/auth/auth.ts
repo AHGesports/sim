@@ -24,7 +24,7 @@ import {
 } from '@/components/emails/render-email'
 import { sendPlanWelcomeEmail } from '@/lib/billing'
 import { authorizeSubscriptionReference } from '@/lib/billing/authorization'
-import { handleNewUser, handleUserDeletion } from '@/lib/billing/core/usage'
+import { NeonInitializationError, handleNewUser, handleUserDeletion } from '@/lib/billing/core/usage'
 import {
   ensureOrganizationForTeamSubscription,
   syncSubscriptionUsageLimits,
@@ -103,6 +103,11 @@ export const auth = betterAuth({
               userId: user.id,
               error,
             })
+
+            // Only block registration for critical Neon errors
+            if (error instanceof NeonInitializationError) {
+              throw error
+            }
           }
         },
       },

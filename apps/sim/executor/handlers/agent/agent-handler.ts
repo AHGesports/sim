@@ -149,14 +149,23 @@ export class AgentBlockHandler implements BlockHandler {
   ): Promise<ToolInput[]> {
     if (!Array.isArray(tools) || tools.length === 0) return tools
 
-    const mcpTools = tools.filter((t) => t.type === 'mcp')
-    if (mcpTools.length === 0) return tools
+    // Filter out internal/marker tools (legacy)
+    const validTools = tools.filter((t) => t.type !== 'internal')
+
+    const mcpTools = validTools.filter((t) => t.type === 'mcp')
+    if (mcpTools.length === 0) return validTools
 
     const serverIds = [...new Set(mcpTools.map((t) => t.params?.serverId).filter(Boolean))]
-    if (serverIds.length === 0) return tools
+    if (serverIds.length === 0) return validTools
 
-    const availableServerIds = new Set<string>()
-    if (ctx.workspaceId && serverIds.length > 0) {
+    // System MCP servers (system:*) are always available - they're virtual servers
+    const systemServerIds = serverIds.filter((id) => id.startsWith('system:'))
+    const userServerIds = serverIds.filter((id) => !id.startsWith('system:'))
+
+    const availableServerIds = new Set<string>(systemServerIds)
+
+    // Only check database for non-system servers
+    if (ctx.workspaceId && userServerIds.length > 0) {
       try {
         const servers = await db
           .select({ id: mcpServers.id, connectionStatus: mcpServers.connectionStatus })
@@ -164,7 +173,7 @@ export class AgentBlockHandler implements BlockHandler {
           .where(
             and(
               eq(mcpServers.workspaceId, ctx.workspaceId),
-              inArray(mcpServers.id, serverIds),
+              inArray(mcpServers.id, userServerIds),
               isNull(mcpServers.deletedAt)
             )
           )
@@ -176,13 +185,13 @@ export class AgentBlockHandler implements BlockHandler {
         }
       } catch (error) {
         logger.warn('Failed to check MCP server availability, including all tools:', error)
-        for (const serverId of serverIds) {
+        for (const serverId of userServerIds) {
           availableServerIds.add(serverId)
         }
       }
     }
 
-    return tools.filter((tool) => {
+    return validTools.filter((tool) => {
       if (tool.type !== 'mcp') return true
       const serverId = tool.params?.serverId
       if (!serverId) return false
@@ -380,6 +389,7 @@ export class AgentBlockHandler implements BlockHandler {
   /**
    * Process MCP tools using cached schemas from build time.
    * Note: Unavailable tools are already filtered by filterUnavailableMcpTools.
+   * Handles server-level entries (isSystemServer: 'true') by expanding to individual tools.
    */
   private async processMcpToolsBatched(
     ctx: ExecutionContext,
@@ -387,11 +397,14 @@ export class AgentBlockHandler implements BlockHandler {
   ): Promise<any[]> {
     if (mcpTools.length === 0) return []
 
+    // Expand system server entries into individual tools
+    const expandedTools = await this.expandSystemServerEntries(ctx, mcpTools)
+
     const results: any[] = []
     const toolsWithSchema: ToolInput[] = []
     const toolsNeedingDiscovery: ToolInput[] = []
 
-    for (const tool of mcpTools) {
+    for (const tool of expandedTools) {
       const serverId = tool.params?.serverId
       const toolName = tool.params?.toolName
 
@@ -426,6 +439,114 @@ export class AgentBlockHandler implements BlockHandler {
   }
 
   /**
+   * Expand system server entries into individual tools.
+   * Server entries have isSystemServer: 'true' and no toolName.
+   */
+  private async expandSystemServerEntries(
+    ctx: ExecutionContext,
+    tools: ToolInput[]
+  ): Promise<ToolInput[]> {
+    const result: ToolInput[] = []
+
+    for (const tool of tools) {
+      const serverId = tool.params?.serverId
+      const isSystemServer = tool.params?.isSystemServer === 'true'
+
+      // If it's a regular tool with toolName, keep as-is
+      if (tool.params?.toolName || !isSystemServer) {
+        logger.debug(`[SystemMcp] Skipping non-system tool (no project_id injection)`, {
+          serverId: serverId || '(none)',
+          toolName: tool.params?.toolName || '(none)',
+          isSystemServer,
+          reason: tool.params?.toolName ? 'has toolName' : 'not a system server',
+        })
+        result.push(tool)
+        continue
+      }
+
+      // It's a system server entry - expand to individual tools
+      if (!serverId?.startsWith('system:')) {
+        logger.debug(`[SystemMcp] Skipping server without system: prefix (no project_id injection)`, {
+          serverId,
+        })
+        result.push(tool)
+        continue
+      }
+
+      try {
+        const { getSystemMcpServers } = await import('@/lib/mcp/system-servers')
+
+        logger.info(`[SystemMcp] Expanding system server ${serverId}`, {
+          userId: ctx.userId || '(empty)',
+          workspaceId: ctx.workspaceId || '(empty)',
+        })
+
+        const servers = await getSystemMcpServers(ctx.userId || '', ctx.workspaceId || '')
+
+        logger.info(`[SystemMcp] getSystemMcpServers returned ${servers.length} servers`, {
+          serverIds: servers.map((s) => s.id),
+        })
+
+        const server = servers.find((s) => s.id === serverId)
+
+        if (server && server.tools.length > 0) {
+          // Expand to individual tools from this server
+          // Inject project_id into params so filterSchemaForLLM removes it from schema
+          // This prevents the LLM from asking the user for the project_id
+          logger.info(`[SystemMcp] Injecting project_id for system server`, {
+            serverId,
+            neonProjectId: server.neonProjectId || '(not set)',
+            willInjectProjectId: !!server.neonProjectId,
+          })
+
+          for (const serverTool of server.tools) {
+            const toolParams = {
+              serverId: serverId,
+              toolName: serverTool.name,
+              serverName: server.name,
+              // Inject projectId (camelCase to match Neon MCP schema) so it's auto-provided and hidden from LLM schema
+              ...(server.neonProjectId && { projectId: server.neonProjectId }),
+            }
+
+            logger.debug(`[SystemMcp] Creating expanded tool with params`, {
+              toolName: serverTool.name,
+              hasProjectId: 'projectId' in toolParams,
+              projectId: toolParams.projectId || '(not injected)',
+            })
+
+            result.push({
+              type: 'mcp',
+              title: serverTool.name,
+              toolId: `${serverId}-${serverTool.name}`,
+              params: toolParams,
+              usageControl: tool.usageControl || 'auto',
+              schema: {
+                ...serverTool.inputSchema,
+                description: serverTool.description,
+              },
+            } as ToolInput)
+          }
+          logger.info(`[SystemMcp] Expanded system server ${serverId} into ${server.tools.length} tools`, {
+            toolNames: server.tools.map((t) => t.name),
+            neonProjectId: server.neonProjectId,
+            projectIdInjected: !!server.neonProjectId,
+          })
+        } else {
+          logger.warn(`[SystemMcp] System server ${serverId} not found or has no tools`, {
+            serverFound: !!server,
+            toolCount: server?.tools?.length ?? 0,
+            availableServers: servers.map((s) => s.id),
+          })
+        }
+      } catch (error) {
+        logger.error(`[SystemMcp] Failed to expand system server ${serverId}:`, error)
+      }
+    }
+
+    return result
+  }
+
+  /**
    * Create MCP tool from cached schema. No MCP server connection required.
    */
   private async createMcpToolFromCachedSchema(
@@ -433,14 +554,48 @@ export class AgentBlockHandler implements BlockHandler {
     tool: ToolInput
   ): Promise<any> {
     const { serverId, toolName, serverName, ...userProvidedParams } = tool.params || {}
+    const isSystemServer = serverId?.startsWith('system:')
+
+    // Log what params will be used for schema filtering
+    if (isSystemServer) {
+      logger.info(`[SystemMcp] Creating tool from cached schema`, {
+        serverId,
+        toolName,
+        userProvidedParamKeys: Object.keys(userProvidedParams),
+        hasProjectId: 'projectId' in userProvidedParams,
+        projectId: userProvidedParams.projectId || '(not set)',
+      })
+    }
 
     const { filterSchemaForLLM } = await import('@/tools/params')
-    const filteredSchema = filterSchemaForLLM(
-      tool.schema || { type: 'object', properties: {} },
-      userProvidedParams
-    )
+    const originalSchema = tool.schema || { type: 'object', properties: {} }
+    const filteredSchema = filterSchemaForLLM(originalSchema, userProvidedParams)
+
+    // Log schema filtering result for system servers
+    if (isSystemServer) {
+      const originalProps = Object.keys(originalSchema.properties || {})
+      const filteredProps = Object.keys(filteredSchema.properties || {})
+      const removedProps = originalProps.filter((p) => !filteredProps.includes(p))
+
+      logger.info(`[SystemMcp] Schema filtered for LLM`, {
+        serverId,
+        toolName,
+        originalProperties: originalProps,
+        filteredProperties: filteredProps,
+        removedProperties: removedProps,
+        projectIdRemovedFromSchema: removedProps.includes('project_id'),
+      })
+    }
 
     const toolId = createMcpToolId(serverId, toolName)
+
+    // Include serverId and toolName in params so they're passed through to executeMcpTool
+    // This is critical for system MCP servers where the toolId gets sanitized and can't be parsed back correctly
+    const toolParams = {
+      ...userProvidedParams,
+      serverId,
+      toolName,
+    }
 
     return {
       id: toolId,
@@ -448,7 +603,7 @@ export class AgentBlockHandler implements BlockHandler {
       description:
         tool.schema?.description || `MCP tool ${toolName} from ${serverName || serverId}`,
       parameters: filteredSchema,
-      params: userProvidedParams,
+      params: toolParams,
       usageControl: tool.usageControl || 'auto',
       executeFunction: async (callParams: Record<string, any>) => {
         const headers = await buildAuthHeaders()
@@ -626,12 +781,19 @@ export class AgentBlockHandler implements BlockHandler {
 
     const toolId = createMcpToolId(serverId, toolName)
 
+    // Include serverId and toolName in params so they're passed through to executeMcpTool
+    const toolParams = {
+      ...userProvidedParams,
+      serverId,
+      toolName,
+    }
+
     return {
       id: toolId,
       name: toolName,
       description: mcpTool.description || `MCP tool ${toolName} from ${mcpTool.serverName}`,
       parameters: filteredSchema,
-      params: userProvidedParams,
+      params: toolParams,
       usageControl: tool.usageControl || 'auto',
       executeFunction: async (callParams: Record<string, any>) => {
         const headers = await buildAuthHeaders()

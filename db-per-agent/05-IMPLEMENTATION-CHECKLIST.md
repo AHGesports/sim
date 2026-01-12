@@ -146,911 +146,327 @@ CREATE INDEX idx_user_db_budget_exceeded ON user_db_budget(budget_exceeded);
 
 ---
 
-## Phase 3: MCP Integration + External API Access (DETAILED)
+## Phase 3: MCP Integration (Neon MCP Server) ✅ COMPLETE
 
 ### Overview
 
 **Goals**:
-1. Enable agents to connect to BOTH their workspace-specific DB (`AGENT_DB_URL`) AND the user's global DB (`GLOBAL_DB_URL`) via postgres-mcp
-2. **Unified access** for both Sim (workflow execution) and AutomationAgentApi (AI agents like browser-use)
+1. Enable agents to connect to BOTH their workspace-specific DB and the user's global DB via Neon MCP
+2. **Unified access** for both Sim (workflow execution) and AutomationAgentApi (AI agents)
 
-**Key Insight**: Unlike user-configured MCP servers (stored in `mcp_servers` table), the database MCP servers are **system-managed** and injected automatically.
+**Key Insight**: Unlike user-configured MCP servers (stored in `mcp_servers` table), the database MCP servers are **system-managed virtual servers** that route to Neon's hosted MCP endpoint.
 
-**postgres-mcp Reference**: [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp)
+**Neon MCP Server**: https://github.com/neondatabase/mcp-server-neon
+
+**Implementation Approach**:
+- **Server-Level Display**: UI shows 2 server entries ("Agent Database MCP", "Globally Shared Database MCP") instead of individual tools
+- **Server Expansion**: At execution time, server entries expand to individual tools for the LLM
+- **Project ID Injection**: Tool calls automatically include the correct `project_id` based on server type
 
 ---
 
-### Architecture: Unified MCP Access (Sim + AutomationAgentApi)
+### Architecture: Neon MCP Server (HTTP Transport)
 
-The system-managed MCP servers are accessible to **both**:
-1. **Sim** - For workflow execution (existing MCP infrastructure)
-2. **AutomationAgentApi** - For AI agents (browser-use, custom agents)
+**Key Design Decision**: Use Neon's hosted MCP server (`https://mcp.neon.tech/mcp`) instead of self-hosted postgres-mcp. This provides:
+- ✅ Serverless compatibility (works on Vercel/Railway)
+- ✅ Multi-tenant via `project_id` routing (single endpoint serves all databases)
+- ✅ Zero deployment/maintenance (Neon hosts it)
+- ✅ Native Neon integration
 
-**Key Design Decision**: AutomationAgentApi calls **Sim's API** for MCP operations. No duplicate MCP logic.
-
-**Flow for Sim (Workflow Execution)**:
+**Flow for Workflow Execution**:
 ```
+Agent Block in Workflow
+    │
+    ├── UI shows 2 server entries: "Agent Database MCP", "Globally Shared Database MCP"
+    ├── User selects servers (auto-added on first load)
+    │
+    ▼
 Workflow Execution
     │
-    ├── MCP Service loads system servers (postgres-agent, postgres-global)
-    ├── Resolves connection strings from encrypted DB records
-    ├── Spawns postgres-mcp via stdio transport
-    ├── Agent executes database operations via MCP tools
-    └── Results returned to workflow
+    ├── Agent handler expands server entries → individual tools (run_sql, list_tables, etc.)
+    ├── LLM decides which tool to call
+    │
+    ▼
+Tool Execution (POST /api/mcp/tools/execute)
+    │
+    ├── Checks isSystemMcpServerId() → routes to executeSystemMcpTool()
+    ├── Gets project_id from workspace_database or user_global_database
+    ├── Creates HTTP client to https://mcp.neon.tech/mcp
+    ├── Injects project_id into tool arguments
+    ├── Executes tool via Neon MCP
+    └── Returns result to workflow
 ```
 
-**Flow for AutomationAgentApi (AI Agents)**:
+**Flow for AutomationAgentApi**:
 ```
 AutomationAgentApi (external service)
     │
-    ├── 1. Call Sim API: GET /api/mcp/system-tools (get available tools)
-    ├── 2. Pass tool schemas to AI agent (browser-use, etc.)
+    ├── 1. Call Sim API: GET /api/mcp/system-tools?workspaceId=X
+    │      Returns: { tools: [...], servers: [...] }
     │
     ▼
 AI Agent decides to call a tool
     │
-    ├── 3. Call Sim API: POST /api/mcp/tools/execute
-    │      Body: { serverId, toolName, arguments, workspaceId }
+    ├── 2. Call Sim API: POST /api/mcp/tools/execute
+    │      Body: { serverId: "system:postgres-agent", toolName: "run_sql", arguments: { sql: "..." } }
     │
     ▼
-Sim handles MCP execution
-    │
-    ├── Spawns postgres-mcp with stdio transport
-    ├── Executes tool
-    ├── Returns result
-    │
-    ▼
-AutomationAgentApi receives result → continues agent loop
+Sim handles execution (same as workflow execution)
 ```
-
-**Why this approach?**
-- ✅ No duplicate MCP logic
-- ✅ Single source of truth for connections
-- ✅ AutomationAgentApi doesn't need DB credentials
-- ✅ Works for local and hosted deployments
-- ✅ Sim already has all the infrastructure
 
 **Environment Variables**:
 ```env
-# In AutomationAgentApi
-SIM_API_URL=https://sim.example.com  # or http://localhost:3000 for local
-SIM_API_KEY=secret                    # Internal API auth
+NEON_API_KEY=neon_api_key_here  # Used for both project creation AND MCP auth
 ```
 
 ---
 
-### Step 3.0: API Endpoints for AutomationAgentApi
+### Step 3.1: System Server Configuration ✅
 
-**Purpose**: Expose MCP tool discovery and execution for external services (AutomationAgentApi).
-
-**Existing endpoint** (already works):
-- `POST /api/mcp/tools/execute` - Execute MCP tool
-
-**New endpoint needed**:
-- `GET /api/mcp/system-tools` - Get system MCP tools (no connection required)
-
-**Files to create/modify**:
-- [ ] `apps/sim/app/api/mcp/system-tools/route.ts` - New endpoint for system tools
-
-**Authentication for AutomationAgentApi**:
+**System Server IDs** (defined in `types.ts`):
 ```typescript
-// Validate internal API key for AutomationAgentApi
-function validateInternalApiKey(request: NextRequest): boolean {
-  const apiKey = request.headers.get('x-internal-api-key')
-  return apiKey === process.env.INTERNAL_API_KEY
-}
-```
-
-**AutomationAgentApi Usage Example**:
-```typescript
-// In AutomationAgentApi service
-const SIM_API_URL = process.env.SIM_API_URL
-
-async function getAvailableTools(workspaceId: string): Promise<McpTool[]> {
-  const response = await fetch(
-    `${SIM_API_URL}/api/mcp/system-tools?workspaceId=${workspaceId}`,
-    { headers: { 'x-internal-api-key': process.env.SIM_API_KEY } }
-  )
-  const data = await response.json()
-  return data.data.tools
-}
-
-async function executeTool(
-  workspaceId: string,
-  serverId: string,
-  toolName: string,
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const response = await fetch(`${SIM_API_URL}/api/mcp/tools/execute`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-internal-api-key': process.env.SIM_API_KEY,
-    },
-    body: JSON.stringify({ workspaceId, serverId, toolName, arguments: args }),
-  })
-  const data = await response.json()
-  return data.data.output
-}
-```
-
----
-
-### Step 3.0.1: One-Time Discovery + Permanent Cache for Tool Schemas
-
-**Problem**: postgres-mcp doesn't export tool schemas as a standalone file. Schemas are in Python code.
-
-**Solution**: One-time MCP discovery → cache schemas permanently in DB.
-
-**Flow**:
-```
-First request for system tools
-    │
-    ├── Check DB: cached schemas exist?
-    │   ├── YES → Return cached schemas (no connection)
-    │   └── NO → Continue to discovery
-    │
-    ├── Connect to postgres-mcp once
-    ├── Call listTools() to get schemas
-    ├── Cache schemas in DB (never expires)
-    ├── Disconnect
-    │
-    └── Return schemas
-```
-
-**Database table for cached schemas**:
-```sql
-CREATE TABLE mcp_tool_schema_cache (
-  id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
-  server_type TEXT NOT NULL,  -- 'postgres-agent' | 'postgres-global'
-  tool_name TEXT NOT NULL,
-  tool_schema JSONB NOT NULL,  -- { name, description, inputSchema }
-  discovered_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  UNIQUE(server_type, tool_name)
-);
-```
-
-**Implementation**:
-```typescript
-// apps/sim/lib/mcp/system-tool-cache.ts
-
-import { db } from '@sim/db'
-import { mcpToolSchemaCache } from '@sim/db/schema'
-import { eq } from 'drizzle-orm'
-
-/**
- * Get cached tool schemas for a server type.
- * Returns null if not cached (triggers discovery).
- */
-export async function getCachedToolSchemas(
-  serverType: 'postgres-agent' | 'postgres-global'
-): Promise<McpToolSchema[] | null> {
-  const cached = await db
-    .select()
-    .from(mcpToolSchemaCache)
-    .where(eq(mcpToolSchemaCache.serverType, serverType))
-
-  if (cached.length === 0) return null
-
-  return cached.map(row => row.toolSchema)
-}
-
-/**
- * Cache tool schemas after discovery.
- * Called once per server type, never expires.
- */
-export async function cacheToolSchemas(
-  serverType: 'postgres-agent' | 'postgres-global',
-  tools: McpToolSchema[]
-): Promise<void> {
-  await db.transaction(async (tx) => {
-    // Clear old cache for this server type
-    await tx
-      .delete(mcpToolSchemaCache)
-      .where(eq(mcpToolSchemaCache.serverType, serverType))
-
-    // Insert new schemas
-    await tx.insert(mcpToolSchemaCache).values(
-      tools.map(tool => ({
-        serverType,
-        toolName: tool.name,
-        toolSchema: tool,
-      }))
-    )
-  })
-}
-
-/**
- * Discover and cache tool schemas (one-time operation).
- */
-export async function discoverAndCacheToolSchemas(
-  serverType: 'postgres-agent' | 'postgres-global',
-  connectionUri: string
-): Promise<McpToolSchema[]> {
-  // Spawn postgres-mcp temporarily to discover tools
-  const config = {
-    transport: 'stdio' as const,
-    command: 'npx',
-    args: ['-y', '@anthropic-ai/postgres-mcp', connectionUri],
-  }
-
-  const client = await createStdioClient(config)
-  try {
-    const tools = await client.listTools()
-    await cacheToolSchemas(serverType, tools)
-    return tools
-  } finally {
-    await client.disconnect()
-  }
-}
-```
-
-**postgres-mcp tools that will be discovered**:
-| Tool | Description |
-|------|-------------|
-| `list_schemas` | List all schemas in the database |
-| `list_objects` | List tables, views, sequences, extensions |
-| `get_object_details` | Get columns, constraints, indexes |
-| `execute_sql` | Execute SQL statements |
-| `explain_query` | Get execution plan |
-| `get_top_queries` | Report slowest queries |
-| `analyze_workload_indexes` | Recommend indexes for workload |
-| `analyze_query_indexes` | Recommend indexes for queries |
-| `analyze_db_health` | Health checks |
-
-**Tasks**:
-- [ ] Add migration for `mcp_tool_schema_cache` table
-- [ ] Create `apps/sim/lib/mcp/system-tool-cache.ts`
-- [ ] Update system tools API to use cache-first approach
-- [ ] Add `createStdioClient()` method to MCP client
-
----
-
-### Step 3.0.2: REMOVED - MCP Server Manager
-
-~~**Purpose**: Dynamically spawn and manage postgres-mcp processes for AI agent sessions.~~
-
-**Removed**: AutomationAgentApi now calls Sim's API instead of spawning its own postgres-mcp processes. This eliminates duplicate logic and simplifies the architecture.
-
----
-
-### Step 3.0.3: Access Mode Configuration (Backend Prep for Phase 5 UI)
-
-**Schema addition** to `workspace_database` table:
-```sql
-ALTER TABLE workspace_database
-ADD COLUMN db_access_mode TEXT NOT NULL DEFAULT 'unrestricted'
-CHECK (db_access_mode IN ('unrestricted', 'restricted'));
-```
-
-**Tasks**:
-- [ ] Add migration for `db_access_mode` column
-- [ ] Update Drizzle schema with `dbAccessMode` field
-- [ ] Add `getWorkspaceDatabaseAccessMode(workspaceId)` query helper
-- [ ] Respect access mode in `executeWorkspaceQuery()`
-
-**Access Modes**:
-| Mode | Allowed Operations | Use Case |
-|------|-------------------|----------|
-| `unrestricted` (default) | SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP | Full agent autonomy |
-| `restricted` | SELECT only | Read-only agents, reporting |
-
-**Note**: UI for changing access mode is Phase 5. Backend is prepared now.
-
----
-
-### Step 3.1: Store Connection Strings in Environment Variables
-
-**Files to modify**:
-- `apps/sim/lib/billing/core/usage.ts` (update `initializeUserNeonDatabase`)
-- `apps/sim/app/api/workspaces/route.ts` (update workspace creation)
-
-**Tasks**:
-- [ ] After creating global DB in `initializeUserNeonDatabase()`:
-  ```typescript
-  // Store GLOBAL_DB_URL in user's environment (encrypted)
-  await createOrUpdateUserEnvVar(userId, 'GLOBAL_DB_URL', neonResult.connectionUri)
-  ```
-- [ ] After creating agent DB in workspace creation:
-  ```typescript
-  // Store AGENT_DB_URL in workspace environment (encrypted)
-  await createOrUpdateWorkspaceEnvVar(workspaceId, 'AGENT_DB_URL', agentDb.connectionUri)
-  ```
-
-**New helper functions** (in `lib/db/queries/environment.ts`):
-- [ ] `createOrUpdateUserEnvVar(userId, key, value)` - Upsert encrypted env var
-- [ ] `createOrUpdateWorkspaceEnvVar(workspaceId, key, value)` - Upsert encrypted env var
-
----
-
-### Step 3.2: System-Managed MCP Server Registration
-
-**Approach**: Create "system" MCP server records that are auto-injected for workspaces with databases.
-
-**Files to create**:
-- [ ] `apps/sim/lib/mcp/system-servers.ts` - System MCP server management
-
-**System Server Configuration**:
-```typescript
-// These are injected automatically, NOT user-configurable
-const SYSTEM_MCP_SERVERS = {
-  'postgres-global': {
-    name: 'Global Database',
-    description: 'User global database (shared across all workspaces)',
-    transport: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-postgres', '${GLOBAL_DB_URL}'],
-    envVarRequired: 'GLOBAL_DB_URL',
-    systemManaged: true,
-  },
-  'postgres-agent': {
-    name: 'Agent Database',
-    description: 'Workspace-specific database (isolated per agent)',
-    transport: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-postgres', '${AGENT_DB_URL}'],
-    envVarRequired: 'AGENT_DB_URL',
-    systemManaged: true,
-  },
-} as const
-```
-
-**Tasks**:
-- [ ] Create `getSystemMcpServers(userId, workspaceId)`:
-  - Check if `GLOBAL_DB_URL` exists in user env → include postgres-global
-  - Check if `AGENT_DB_URL` exists in workspace env → include postgres-agent
-  - Return list of available system servers
-- [ ] Create `isSystemMcpServer(serverId)` - Returns true for system-managed servers
-
----
-
-### Step 3.3: Update MCP Service to Handle System Servers
-
-**File**: `apps/sim/lib/mcp/service.ts`
-
-**Tasks**:
-- [ ] Modify `getWorkspaceServers()` to include system servers:
-  ```typescript
-  async getWorkspaceServers(userId: string, workspaceId: string): Promise<McpServerConfig[]> {
-    // Get user-configured servers from database
-    const userServers = await this.getUserConfiguredServers(workspaceId)
-
-    // Get system-managed servers based on available env vars
-    const systemServers = await getSystemMcpServers(userId, workspaceId)
-
-    return [...systemServers, ...userServers]
-  }
-  ```
-
-- [ ] Update `resolveConfigEnvVars()` to handle stdio transport:
-  ```typescript
-  // For stdio transport, resolve env vars in args array
-  if (resolvedConfig.args) {
-    resolvedConfig.args = resolvedConfig.args.map(arg =>
-      this.resolveEnvVars(arg, envVars)
-    )
-  }
-  ```
-
-- [ ] Add command/args fields support to `McpServerConfig` type:
-  ```typescript
-  interface McpServerConfig {
-    // ... existing fields
-    command?: string       // For stdio transport
-    args?: string[]        // Command arguments
-    systemManaged?: boolean
-  }
-  ```
-
----
-
-### Step 3.3.1: Auto-Populate System MCP Tools in Agent Block (Visible in UI)
-
-**Purpose**: System MCP tools (postgres-agent, postgres-global) are **automatically added** to Agent blocks and **visible in the tools UI**, allowing users to configure or remove them like any other tool.
-
----
-
-#### Architecture: Connection-Free Tool Population
-
-**Key Insight**: MCP connections are **expensive** (create → use → close). We must NOT open connections just to show tools in the UI.
-
-**Current MCP Connection Flow** (from codebase analysis):
-```
-User opens Agent block
-    ↓
-useMcpTools() calls /api/mcp/tools/discover
-    ↓
-mcpService.discoverTools() → for each server:
-    ├── createClient() → new connection
-    ├── client.listTools() → fetch tools
-    └── client.disconnect() → close connection
-    ↓
-Results cached for 5 minutes (server) / 30 seconds (frontend)
-```
-
-**Problem**: Opening DB connections just to list tools wastes resources and could overload the database.
-
-**Solution**: Use **pre-defined schemas** for system MCP tools (postgres-mcp has stable, known tools).
-
----
-
-#### Implementation: Cached Tool Schemas (From One-Time Discovery)
-
-**Tool schemas come from Step 3.0.1's DB cache** (not manually created):
-
-```
-First request for system tools
-    │
-    ├── Check mcp_tool_schema_cache table
-    │   ├── Cache exists → Return cached schemas (NO connection)
-    │   └── Cache empty → Trigger one-time discovery (see Step 3.0.1)
-    │
-    └── Return tool schemas to UI
-```
-
-**When does discovery happen?**
-- Triggered automatically when first user/workspace database is created
-- Or manually via admin endpoint: `POST /api/admin/mcp/discover-tools`
-- Only needs to run ONCE per deployment (postgres-mcp tools are stable)
-
----
-
-#### Files to Create/Modify
-
-**1. System Server Definitions** - `apps/sim/lib/mcp/system-servers.ts`
-
-```typescript
-import { getCachedToolSchemas } from './system-tool-cache'
-import { getUserGlobalDatabase, getWorkspaceDatabase } from '@/lib/db/queries'
-
-/**
- * System MCP server IDs (virtual, not stored in DB)
- */
 export const SYSTEM_MCP_SERVER_IDS = {
   POSTGRES_AGENT: 'system:postgres-agent',
   POSTGRES_GLOBAL: 'system:postgres-global',
 } as const
+```
 
-/**
- * Check if a server ID is a system server
- */
-export function isSystemMcpServer(serverId: string): boolean {
-  return serverId.startsWith('system:')
-}
+**Neon MCP Configuration** (defined in `types.ts`):
+```typescript
+export const NEON_MCP_CONFIG = {
+  url: 'https://mcp.neon.tech/mcp',  // Streamable HTTP endpoint (POST-based)
+  timeout: 30000,
+  retries: 3,
+} as const
+```
 
+**Allowed Tools** (SQL only, defined in `types.ts`):
+```typescript
+export const NEON_MCP_ALLOWED_TOOLS = [
+  'run_sql',
+  'run_sql_transaction',
+  'list_tables',
+  'describe_table_schema',
+] as const
+```
+
+**Excluded Tools** (for security):
+- Project management (list_projects, create_project, delete_project)
+- Branching (create_branch, delete_branch, compare_schemas)
+- Migrations (prepare_migration, complete_migration)
+- Connection string retrieval (get_connection_string)
+
+---
+
+### Step 3.2: Tool Schema Caching ✅
+
+**Database table** (`mcp_tool_schema_cache`):
+```sql
+CREATE TABLE mcp_tool_schema_cache (
+  id TEXT PRIMARY KEY,
+  server_type TEXT NOT NULL,  -- 'postgres-agent' | 'postgres-global'
+  tool_name TEXT NOT NULL,
+  tool_schema JSONB NOT NULL,
+  discovered_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(server_type, tool_name)
+);
+```
+
+**Discovery Flow**:
+```
+getSystemMcpServers() called
+    │
+    ├── Check mcp_tool_schema_cache table
+    │   ├── Cache exists → Return cached schemas (NO HTTP call)
+    │   └── Cache empty → Trigger discovery
+    │
+    ├── Connect to https://mcp.neon.tech/mcp via HTTP
+    ├── Call listTools() → get all Neon MCP tools
+    ├── Filter to NEON_MCP_ALLOWED_TOOLS only
+    ├── Cache filtered schemas in DB
+    │
+    └── Return tool schemas
+```
+
+**Files**:
+- `apps/sim/lib/mcp/system-tool-cache.ts` - Cache management functions
+- `apps/sim/lib/mcp/system-servers.ts` - `discoverAndCacheToolSchemas()` function
+
+---
+
+### Step 3.3: System Server Implementation ✅
+
+**File**: `apps/sim/lib/mcp/system-servers.ts`
+
+**Key Functions**:
+
+```typescript
 /**
  * Get system MCP servers available for a workspace.
- * Returns virtual server configs WITHOUT opening any connections.
- * Tool schemas come from DB cache (populated by one-time discovery).
+ * Returns virtual server configs with tools from cached schemas.
  */
 export async function getSystemMcpServers(
   userId: string,
   workspaceId: string
-): Promise<SystemMcpServer[]> {
-  const servers: SystemMcpServer[] = []
-
-  // Get cached tool schemas (from one-time discovery - Step 3.0.1)
-  const cachedSchemas = await getCachedToolSchemas('postgres-agent')
-  if (!cachedSchemas) {
-    // Cache is empty - discovery hasn't run yet
-    // Return empty servers (tools will appear after first DB is created)
-    logger.warn('MCP tool schema cache is empty. Run discovery first.')
-    return []
-  }
-
-  // Check if workspace has Agent DB
-  const workspaceDb = await getWorkspaceDatabase(workspaceId)
-  if (workspaceDb?.neonConnectionUri) {
-    servers.push({
-      id: SYSTEM_MCP_SERVER_IDS.POSTGRES_AGENT,
-      name: 'Agent Database',
-      description: 'Workspace-specific database for this agent',
-      connectionStatus: 'connected', // Always show as available
-      systemManaged: true,
-      tools: cachedSchemas.map(tool => ({
-        ...tool,
-        serverId: SYSTEM_MCP_SERVER_IDS.POSTGRES_AGENT,
-        serverName: 'Agent Database',
-      })),
-    })
-  }
-
-  // Check if user has Global DB
-  const globalDb = await getUserGlobalDatabase(userId)
-  if (globalDb?.neonConnectionUri) {
-    servers.push({
-      id: SYSTEM_MCP_SERVER_IDS.POSTGRES_GLOBAL,
-      name: 'Global Database',
-      description: 'User global database shared across all workspaces',
-      connectionStatus: 'connected',
-      systemManaged: true,
-      tools: cachedSchemas.map(tool => ({
-        ...tool,
-        serverId: SYSTEM_MCP_SERVER_IDS.POSTGRES_GLOBAL,
-        serverName: 'Global Database',
-      })),
-    })
-  }
-
-  return servers
-}
+): Promise<SystemMcpServer[]>
 
 /**
- * Get system MCP tools for a workspace (for UI population).
- * Uses cached schemas from DB (Step 3.0.1) - NO CONNECTION REQUIRED.
+ * Execute a tool on a system MCP server.
+ * Connects to Neon MCP via HTTP and injects project_id.
  */
-export async function getSystemMcpTools(
+export async function executeSystemMcpTool(
   userId: string,
-  workspaceId: string
-): Promise<McpTool[]> {
-  const servers = await getSystemMcpServers(userId, workspaceId)
-  return servers.flatMap(server => server.tools)
-}
-```
-
----
-
-**2. API Route** - `apps/sim/app/api/mcp/system-tools/route.ts`
-
-```typescript
-import { createLogger } from '@sim/logger'
-import type { NextRequest } from 'next/server'
-import { getSystemMcpTools } from '@/lib/mcp/system-servers'
-import { createMcpSuccessResponse, createMcpErrorResponse } from '@/lib/mcp/utils'
-import { withMcpAuth } from '@/lib/mcp/middleware'
-
-const logger = createLogger('SystemMcpToolsAPI')
+  workspaceId: string,
+  serverId: SystemMcpServerId,
+  toolCall: McpToolCall
+): Promise<McpToolResult>
 
 /**
- * Validate internal API key for AutomationAgentApi access
+ * Discover and cache tool schemas from Neon MCP.
+ * Called once (triggered on first database creation).
  */
-function validateInternalApiKey(request: NextRequest): boolean {
-  const apiKey = request.headers.get('x-internal-api-key')
-  return apiKey === process.env.INTERNAL_API_KEY
-}
+export async function discoverAndCacheToolSchemas(
+  projectId: string,
+  force?: boolean
+): Promise<void>
+```
 
-/**
- * GET /api/mcp/system-tools
- * Returns system MCP tools WITHOUT opening any database connections.
- * Schemas come from DB cache (populated by one-time discovery - Step 3.0.1).
- *
- * Supports two auth methods:
- * 1. Session-based (for Sim UI)
- * 2. Internal API key (for AutomationAgentApi)
- */
-export const GET = async (request: NextRequest) => {
-  const requestId = crypto.randomUUID().slice(0, 8)
-
-  // Check for internal API key first (AutomationAgentApi)
-  if (validateInternalApiKey(request)) {
-    const workspaceId = request.nextUrl.searchParams.get('workspaceId')
-    if (!workspaceId) {
-      return createMcpErrorResponse(null, 'workspaceId required', 400)
-    }
-
-    // Get userId from workspace (AutomationAgentApi doesn't have session)
-    const workspace = await getWorkspace(workspaceId)
-    if (!workspace) {
-      return createMcpErrorResponse(null, 'Workspace not found', 404)
-    }
-
-    const tools = await getSystemMcpTools(workspace.userId, workspaceId)
-    return createMcpSuccessResponse({ tools })
-  }
-
-  // Fall back to session-based auth (Sim UI)
-  return withMcpAuth('read')(
-    async (req: NextRequest, { userId, workspaceId }) => {
-      try {
-        logger.info(`[${requestId}] Fetching system MCP tools`)
-        const tools = await getSystemMcpTools(userId, workspaceId)
-        return createMcpSuccessResponse({ tools })
-      } catch (error) {
-        logger.error(`[${requestId}] Error fetching system MCP tools:`, error)
-        return createMcpErrorResponse(error, 'Failed to fetch system tools', 500)
-      }
-    }
-  )(request)
+**Project ID Injection**:
+```typescript
+// In executeSystemMcpTool()
+const toolCallWithProject: McpToolCall = {
+  name: toolCall.name,
+  arguments: {
+    ...toolCall.arguments,
+    project_id: projectId,  // Injected based on server type
+  },
 }
 ```
 
+| Server ID | Project ID Source |
+|-----------|------------------|
+| `system:postgres-agent` | `workspace_database.neon_project_id` |
+| `system:postgres-global` | `user_global_database.neon_project_id` |
+
 ---
 
-**3. React Query Hook** - `apps/sim/hooks/queries/system-mcp.ts`
+### Step 3.4: API Endpoints ✅
+
+**GET /api/mcp/system-tools**
+
+Returns system MCP servers and their tools for a workspace.
 
 ```typescript
-import { useQuery } from '@tanstack/react-query'
-import type { McpTool } from '@/lib/mcp/types'
-
-export const systemMcpKeys = {
-  all: ['system-mcp'] as const,
-  tools: (workspaceId: string) => [...systemMcpKeys.all, 'tools', workspaceId] as const,
-}
-
-async function fetchSystemMcpTools(workspaceId: string): Promise<McpTool[]> {
-  const response = await fetch(`/api/mcp/system-tools?workspaceId=${workspaceId}`)
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}))
-    throw new Error(data.error || 'Failed to fetch system MCP tools')
-  }
-  const data = await response.json()
-  return data.data?.tools || []
-}
-
-/**
- * Fetch system MCP tools (postgres-agent, postgres-global).
- * Uses cached schemas from DB (Step 3.0.1) - NO DATABASE CONNECTION REQUIRED.
- */
-export function useSystemMcpTools(workspaceId: string) {
-  return useQuery({
-    queryKey: systemMcpKeys.tools(workspaceId),
-    queryFn: () => fetchSystemMcpTools(workspaceId),
-    enabled: !!workspaceId,
-    staleTime: 5 * 60 * 1000, // 5 minutes (tools don't change)
-  })
-}
-```
-
----
-
-**4. Update tool-input.tsx** - Auto-populate on component load
-
-```typescript
-// In tool-input.tsx - add import
-import { useSystemMcpTools } from '@/hooks/queries/system-mcp'
-import { isSystemMcpServer } from '@/lib/mcp/system-servers'
-
-// Inside ToolInput component:
-const { data: systemMcpTools = [], isLoading: systemToolsLoading } = useSystemMcpTools(workspaceId)
-
-// Auto-populate system tools on first load
-const hasAutoPopulatedRef = useRef(false)
-
-useEffect(() => {
-  if (
-    isPreview ||
-    systemToolsLoading ||
-    systemMcpTools.length === 0 ||
-    hasAutoPopulatedRef.current
-  ) {
-    return
-  }
-
-  // Check which system tools are missing
-  const missingSystemTools = systemMcpTools.filter(sysTool =>
-    !selectedTools.some(t =>
-      t.type === 'mcp' &&
-      t.params?.serverId === sysTool.serverId &&
-      t.params?.toolName === sysTool.name
-    )
-  )
-
-  if (missingSystemTools.length > 0) {
-    hasAutoPopulatedRef.current = true
-
-    const newTools: StoredTool[] = missingSystemTools.map(tool => ({
-      type: 'mcp',
-      title: tool.name,
-      toolId: createMcpToolId(tool.serverId, tool.name),
-      params: {
-        serverId: tool.serverId,
-        toolName: tool.name,
-        serverName: tool.serverName,
-      },
-      usageControl: 'auto', // Use when needed (default)
-      schema: {
-        ...tool.inputSchema,
-        description: tool.description,
-      },
-      isExpanded: false,
-    }))
-
-    logger.info(`Auto-populated ${newTools.length} system MCP tools`)
-    setStoreValue([...newTools, ...selectedTools])
-  }
-}, [systemMcpTools, systemToolsLoading, selectedTools, isPreview, setStoreValue])
-
-// Merge system tools into availableMcpTools for the dropdown
-const allAvailableMcpTools = useMemo(() => {
-  // Include system tools (they're always "connected")
-  const systemToolsForDropdown = systemMcpTools.map(tool => ({
-    id: createMcpToolId(tool.serverId, tool.name),
-    name: tool.name,
-    description: tool.description,
-    serverId: tool.serverId,
-    serverName: tool.serverName,
-    inputSchema: tool.inputSchema,
-    bgColor: '#10B981', // Green for system tools
-    icon: DatabaseIcon, // Use database icon
-  }))
-
-  return [...systemToolsForDropdown, ...availableMcpTools]
-}, [systemMcpTools, availableMcpTools])
-```
-
----
-
-**5. Update MCP Service for Execution** - `apps/sim/lib/mcp/service.ts`
-
-```typescript
-// Add to executeTool method - handle system servers
-
-async executeTool(
-  userId: string,
-  serverId: string,
-  toolCall: McpToolCall,
-  workspaceId: string
-): Promise<McpToolResult> {
-  // Handle system MCP servers
-  if (isSystemMcpServer(serverId)) {
-    return this.executeSystemMcpTool(userId, serverId, toolCall, workspaceId)
-  }
-
-  // ... existing code for user-configured servers
-}
-
-/**
- * Execute tool on system MCP server.
- * Connection is opened HERE (at execution time), not during discovery.
- */
-private async executeSystemMcpTool(
-  userId: string,
-  serverId: string,
-  toolCall: McpToolCall,
-  workspaceId: string
-): Promise<McpToolResult> {
-  // Get connection string based on server type
-  let connectionUri: string
-
-  if (serverId === SYSTEM_MCP_SERVER_IDS.POSTGRES_AGENT) {
-    const workspaceDb = await getWorkspaceDatabase(workspaceId)
-    if (!workspaceDb?.neonConnectionUri) {
-      throw new Error('Agent database not configured for this workspace')
-    }
-    connectionUri = await decrypt(workspaceDb.neonConnectionUri)
-  } else if (serverId === SYSTEM_MCP_SERVER_IDS.POSTGRES_GLOBAL) {
-    const globalDb = await getUserGlobalDatabase(userId)
-    if (!globalDb?.neonConnectionUri) {
-      throw new Error('Global database not configured for this user')
-    }
-    connectionUri = await decrypt(globalDb.neonConnectionUri)
-  } else {
-    throw new Error(`Unknown system server: ${serverId}`)
-  }
-
-  // Create stdio config for postgres-mcp
-  const config: McpServerConfig = {
-    id: serverId,
-    name: serverId === SYSTEM_MCP_SERVER_IDS.POSTGRES_AGENT ? 'Agent Database' : 'Global Database',
-    transport: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-postgres', connectionUri],
-  }
-
-  // Execute with short-lived connection
-  const client = await this.createStdioClient(config)
-  try {
-    return await client.callTool(toolCall)
-  } finally {
-    await client.disconnect()
-  }
-}
-```
-
----
-
-#### Connection Flow Summary
-
-| Phase | Action | Connection Opened? |
-|-------|--------|-------------------|
-| **UI Load** | Fetch system MCP tools | ❌ No (uses pre-defined schemas) |
-| **Tool Selection** | User adds/removes tools | ❌ No |
-| **Workflow Save** | Store tool config | ❌ No |
-| **Workflow Execution** | LLM calls tool | ✅ Yes (create → use → close) |
-
----
-
-#### Tasks
-
-- [ ] Create `apps/sim/lib/mcp/system-servers.ts` - System server logic (uses cached schemas from Step 3.0.1)
-- [ ] Create `apps/sim/app/api/mcp/system-tools/route.ts` - API endpoint
-- [ ] Create `apps/sim/hooks/queries/system-mcp.ts` - React Query hook
-- [ ] Update `apps/sim/.../tool-input.tsx` - Auto-populate system tools
-- [ ] Update `apps/sim/lib/mcp/service.ts` - Handle system server execution
-- [ ] Add `createStdioClient()` method for stdio transport support
-- [ ] Trigger schema discovery on first database creation (in `initializeUserNeonDatabase` or `initializeWorkspaceNeonDatabase`)
-
----
-
-#### User Experience
-
-1. User creates Agent block
-2. System tools are **auto-populated** (no connection opened):
-   ```
-   ┌─────────────────────────────────────────┐
-   │ Tools                              [+]  │
-   ├─────────────────────────────────────────┤
-   │ 🗄️ Agent Database                       │
-   │    └─ list_tables      [Auto ▾] [×]    │
-   │    └─ query            [Auto ▾] [×]    │
-   │    └─ execute_sql      [Auto ▾] [×]    │
-   │                                         │
-   │ 🗄️ Global Database                      │
-   │    └─ list_tables      [Auto ▾] [×]    │
-   │    └─ query            [Auto ▾] [×]    │
-   │    └─ execute_sql      [Auto ▾] [×]    │
-   └─────────────────────────────────────────┘
-   ```
-
-3. User can:
-   - Change mode: Auto → Force → Never
-   - Remove tools with [×]
-   - Tools still appear in dropdown if removed
-
-4. **Connection only opens at execution time** when LLM actually calls the tool
-
----
-
-### Step 3.4: Update MCP Client for stdio Transport
-
-**File**: `apps/sim/lib/mcp/client.ts`
-
-**Tasks**:
-- [ ] Add stdio transport support (if not already present):
-  ```typescript
-  // For stdio transport, spawn the process with resolved args
-  if (config.transport === 'stdio') {
-    // Use Node.js child_process to spawn MCP server
-    // Pass resolved connection string via command args
-  }
-  ```
-
-- [ ] Ensure proper process lifecycle management (spawn on connect, kill on disconnect)
-
----
-
-### Step 3.5: Hide System Servers from User UI
-
-**Files to modify**:
-- [ ] `apps/sim/app/workspace/[workspaceId]/settings/` - MCP settings UI
-- [ ] API routes that list MCP servers
-
-**Tasks**:
-- [ ] Filter out system-managed servers from UI list:
-  ```typescript
-  const userVisibleServers = servers.filter(s => !s.systemManaged)
-  ```
-- [ ] Show "Database Connected" indicator instead of server details
-- [ ] Prevent users from editing/deleting system servers
-
----
-
-### Step 3.6: postgres-mcp Configuration Details
-
-**postgres-mcp Usage Notes**:
-- Connection string format: `postgresql://user:password@host/database?sslmode=require`
-- Access modes:
-  - `--access-mode=unrestricted` (default) - Full CRUD + DDL
-  - `--access-mode=restricted` - Read-only
-- We use **unrestricted** mode for agent databases (agents need full schema control)
-
-**Configuration for stdio transport**:
-```json
+// Response
 {
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-postgres", "${AGENT_DB_URL}"],
-  "env": {}
+  "success": true,
+  "data": {
+    "tools": [...],    // Individual tools (for LLM)
+    "servers": [...]   // Server configs (for UI grouping)
+  }
 }
 ```
 
-**Note**: The connection string is passed as a CLI argument, NOT as `DATABASE_URI` env var (simpler, more secure).
+**POST /api/mcp/tools/execute**
+
+Executes MCP tool. Routes to system server handler when `serverId.startsWith('system:')`.
+
+```typescript
+// Request
+{
+  "serverId": "system:postgres-agent",
+  "toolName": "run_sql",
+  "arguments": { "sql": "SELECT * FROM users" },
+  "workspaceId": "..."
+}
+```
 
 ---
 
-### Step 3.7: Testing Checklist
+### Step 3.5: UI Implementation ✅
+
+**Server-Level Display** (not individual tools):
+
+The UI shows **2 server entries** instead of 6 individual tools:
+- **Agent Database MCP** - Brand primary color (`var(--brand-primary-hex)`)
+- **Globally Shared Database MCP** - Blue (`#3B82F6`)
+
+**File**: `apps/sim/.../tool-input.tsx`
+
+**Key Changes**:
+1. Added `useSystemMcpServers()` hook to fetch servers
+2. Changed dropdown to show servers, not individual tools
+3. Auto-populates server entries on first load
+4. Validation skips system servers (always "connected")
+5. Server entries stored with `isSystemServer: 'true'` flag
+
+**Storage Format** (server entry):
+```typescript
+{
+  type: 'mcp',
+  title: 'Agent Database MCP',
+  toolId: 'system:postgres-agent',
+  params: {
+    serverId: 'system:postgres-agent',
+    serverName: 'Agent Database MCP',
+    isSystemServer: 'true',  // Flag for server-level entry
+  },
+  usageControl: 'auto',
+}
+```
+
+---
+
+### Step 3.6: Agent Handler Updates ✅
+
+**File**: `apps/sim/executor/handlers/agent/agent-handler.ts`
+
+**Key Changes**:
+
+1. **System servers always available**:
+```typescript
+// In filterUnavailableMcpTools()
+const systemServerIds = serverIds.filter((id) => id.startsWith('system:'))
+const availableServerIds = new Set<string>(systemServerIds)  // Always included
+```
+
+2. **Server entry expansion**:
+```typescript
+// In expandSystemServerEntries()
+// Server entries (isSystemServer: 'true') are expanded to individual tools
+// at execution time by fetching tools from getSystemMcpServers()
+
+// Input: { serverId: 'system:postgres-agent', isSystemServer: 'true' }
+// Output: [
+//   { serverId: 'system:postgres-agent', toolName: 'run_sql', ... },
+//   { serverId: 'system:postgres-agent', toolName: 'list_tables', ... },
+//   { serverId: 'system:postgres-agent', toolName: 'describe_table_schema', ... },
+//   { serverId: 'system:postgres-agent', toolName: 'run_sql_transaction', ... },
+// ]
+```
+
+---
+
+### Step 3.7: React Query Hooks ✅
+
+**File**: `apps/sim/hooks/queries/system-mcp.ts`
+
+```typescript
+// Fetch system MCP tools (individual tools)
+export function useSystemMcpTools(workspaceId: string)
+
+// Fetch system MCP servers (for UI grouping)
+export function useSystemMcpServers(workspaceId: string)
+```
+
+Both hooks share the same query key and fetch function to avoid duplicate API calls.
+
+---
+
+### Step 3.8: Testing Checklist
 
 **Functional Tests**:
-- [ ] Agent can CREATE TABLE via postgres-global MCP
+- [ ] Agent can CREATE TABLE via run_sql tool
 - [ ] Agent can INSERT/SELECT/UPDATE/DELETE via MCP
 - [ ] Agent can ALTER TABLE and DROP TABLE
 - [ ] Multiple agents of same user can access Global DB
@@ -1060,8 +476,52 @@ private async executeSystemMcpTool(
 **Security Tests**:
 - [ ] Connection strings never exposed to frontend (verify API responses)
 - [ ] System MCP servers not visible in MCP server list UI
-- [ ] `${GLOBAL_DB_URL}` reference in MCP config is resolved server-side only
+- [ ] Project ID injection works correctly (each database routes to correct Neon project)
 - [ ] MCP tool results don't leak connection strings
+
+---
+
+### Phase 3 Implementation Summary
+
+**Status**: ✅ COMPLETE
+
+**Architecture**:
+- Uses Neon's hosted MCP server at `https://mcp.neon.tech/mcp`
+- Server-level UI display (2 entries: "Agent Database MCP", "Globally Shared Database MCP")
+- Server entries expand to individual tools at execution time
+- Project ID injection routes tool calls to correct Neon project
+- Tool schemas cached in `mcp_tool_schema_cache` table (one-time discovery)
+
+**Files Created/Modified**:
+| File | Purpose | Status |
+|------|---------|--------|
+| `packages/db/schema.ts` | Added `mcpToolSchemaCache` table | ✅ |
+| `packages/db/migrations/0136_workable_devos.sql` | Migration file | ✅ |
+| `apps/sim/lib/mcp/types.ts` | System server types, `NEON_MCP_CONFIG`, `SYSTEM_MCP_SERVER_IDS`, `NEON_MCP_ALLOWED_TOOLS` | ✅ |
+| `apps/sim/lib/mcp/system-tool-cache.ts` | Cache management for tool schemas | ✅ |
+| `apps/sim/lib/mcp/system-servers.ts` | System server logic + tool execution via Neon MCP | ✅ |
+| `apps/sim/app/api/mcp/system-tools/route.ts` | API endpoint returning tools and servers | ✅ |
+| `apps/sim/app/api/mcp/tools/execute/route.ts` | Routes system server calls to executeSystemMcpTool() | ✅ |
+| `apps/sim/hooks/queries/system-mcp.ts` | `useSystemMcpTools()` and `useSystemMcpServers()` hooks | ✅ |
+| `apps/sim/.../tool-input.tsx` | Server-level display, auto-populate, validation skip | ✅ |
+| `apps/sim/executor/handlers/agent/agent-handler.ts` | `expandSystemServerEntries()`, system servers always available | ✅ |
+
+**Key Implementation Details**:
+
+1. **Server-Level Display**: UI shows 2 server entries instead of 6 individual tools. This is cleaner and more intuitive.
+
+2. **Server Expansion**: At execution time, server entries (with `isSystemServer: 'true'`) are expanded to individual tools by `agent-handler.ts`.
+
+3. **Project ID Injection**: `executeSystemMcpTool()` automatically injects `project_id` based on server type:
+   - `system:postgres-agent` → `workspace_database.neon_project_id`
+   - `system:postgres-global` → `user_global_database.neon_project_id`
+
+4. **Validation Skip**: System servers are always "connected" (virtual servers), so validation is skipped.
+
+5. **Shared Query Key**: Both `useSystemMcpTools()` and `useSystemMcpServers()` share the same query key to avoid duplicate API calls.
+
+**Deleted** (no longer needed):
+- `apps/sim/lib/mcp/stdio-client.ts` - Was for postgres-mcp-pro stdio transport
 
 ---
 
@@ -1526,6 +986,23 @@ export async function GET(req: NextRequest, { params }: { params: { userId: stri
 | `apps/sim/lib/auth/auth.ts` | User delete hook | ✅ |
 | `apps/sim/app/api/workspaces/route.ts` | Agent DB on creation | ✅ |
 | `apps/sim/app/api/workspaces/[id]/route.ts` | Agent DB on deletion | ✅ |
+
+### Phase 3 Files (Complete)
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `packages/db/schema.ts` | Added `mcpToolSchemaCache` table | ✅ |
+| `packages/db/migrations/0136_workable_devos.sql` | Migration for cache table | ✅ |
+| `apps/sim/lib/mcp/types.ts` | `NEON_MCP_CONFIG`, `SYSTEM_MCP_SERVER_IDS`, `NEON_MCP_ALLOWED_TOOLS`, type definitions | ✅ |
+| `apps/sim/lib/mcp/system-tool-cache.ts` | `getCachedToolSchemas()`, `cacheToolSchemas()`, `hasCachedSchemas()`, `clearCachedSchemas()` | ✅ |
+| `apps/sim/lib/mcp/system-servers.ts` | `getSystemMcpServers()`, `executeSystemMcpTool()`, `discoverAndCacheToolSchemas()` | ✅ |
+| `apps/sim/app/api/mcp/system-tools/route.ts` | API endpoint returning tools and servers for workspace | ✅ |
+| `apps/sim/app/api/mcp/tools/execute/route.ts` | Routes system server calls to `executeSystemMcpTool()` | ✅ |
+| `apps/sim/hooks/queries/system-mcp.ts` | `useSystemMcpTools()`, `useSystemMcpServers()` hooks | ✅ |
+| `apps/sim/.../tool-input.tsx` | Server-level display, auto-populate, validation skip for system servers | ✅ |
+| `apps/sim/executor/handlers/agent/agent-handler.ts` | `expandSystemServerEntries()`, system servers always available | ✅ |
+
+**Deleted**: `apps/sim/lib/mcp/stdio-client.ts` (replaced by Neon MCP HTTP transport)
 
 ### Phase 4 Files (Pending)
 

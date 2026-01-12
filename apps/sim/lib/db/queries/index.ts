@@ -16,3 +16,12 @@ export {
   getWorkspaceDatabase,
   getUserWorkspaceDatabases,
 } from './workspace-database'
+
+// Workspace system MCP tool configuration
+export {
+  getWorkspaceToolConfig,
+  getDisabledTools,
+  setToolEnabled,
+  bulkSetToolsEnabled,
+  type ToolConfigRecord,
+} from './workspace-mcp-config'

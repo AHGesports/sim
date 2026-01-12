@@ -5,6 +5,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
+import { NeonInitializationError } from '@/lib/billing/core/usage'
 import { createWorkspaceDatabaseRecord } from '@/lib/db/queries'
 import { buildDefaultWorkflowArtifacts } from '@/lib/workflows/defaults'
 import { saveWorkflowToNormalizedTables } from '@/lib/workflows/persistence/utils'
@@ -124,6 +125,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ workspace: newWorkspace })
   } catch (error) {
     logger.error('Error creating workspace:', error)
+
+    // Return specific error message for Neon initialization failures
+    if (error instanceof NeonInitializationError) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
     return NextResponse.json({ error: 'Failed to create workspace' }, { status: 500 })
   }
 }
@@ -203,10 +210,10 @@ async function createWorkspace(userId: string, name: string) {
     throw error
   }
 
-  // Create Neon agent database for this workspace (async, non-blocking)
-  initializeWorkspaceNeonDatabase(workspaceId).catch((error) => {
-    logger.error(`Background Neon database creation failed for workspace ${workspaceId}:`, error)
-  })
+  // Create Neon agent database for this workspace
+  // IMPORTANT: This is now blocking - if NEON_API_KEY is configured, creation MUST succeed
+  // If not configured, it fails silently
+  await initializeWorkspaceNeonDatabase(workspaceId)
 
   // Return the workspace data directly instead of querying again
   return {
@@ -223,7 +230,9 @@ async function createWorkspace(userId: string, name: string) {
 
 /**
  * Initializes a Neon agent database for a workspace.
+ * Triggers one-time schema discovery if not already cached.
  * Fails silently if NEON_API_KEY is not configured.
+ * BLOCKS workspace creation if NEON_API_KEY is configured but creation fails.
  */
 async function initializeWorkspaceNeonDatabase(workspaceId: string): Promise<void> {
   const neonApiKey = process.env.NEON_API_KEY
@@ -246,11 +255,24 @@ async function initializeWorkspaceNeonDatabase(workspaceId: string): Promise<voi
       workspaceId,
       projectId: neonResult.projectId,
     })
+
+    // Trigger one-time schema discovery if not already done
+    // This populates mcp_tool_schema_cache for UI tool population
+    triggerMcpSchemaDiscovery(neonResult.projectId).catch((error) => {
+      logger.warn('Failed to trigger MCP schema discovery (non-blocking)', {
+        workspaceId,
+        error,
+      })
+    })
   } catch (error) {
-    logger.error('Failed to create Neon agent database for workspace', {
+    // If NEON_API_KEY is configured, Neon is REQUIRED - block workspace creation on failure
+    logger.error('Failed to create Neon agent database for workspace (BLOCKING workspace creation)', {
       workspaceId,
       error,
     })
+    throw new Error(
+      `Failed to initialize workspace database. Neon is required but database creation failed: ${error instanceof Error ? error.message : String(error)}`
+    )
   }
 }
 
@@ -299,5 +321,19 @@ async function ensureWorkflowsHaveWorkspace(userId: string, defaultWorkspaceId: 
       .where(and(eq(workflow.userId, userId), isNull(workflow.workspaceId)))
 
     logger.info(`Fixed ${orphanedWorkflows.length} orphaned workflows for user ${userId}`)
+  }
+}
+
+/**
+ * Trigger MCP schema discovery if not already cached.
+ * This is a non-blocking operation - it populates the cache for future use.
+ */
+async function triggerMcpSchemaDiscovery(projectId: string): Promise<void> {
+  try {
+    const { discoverAndCacheToolSchemas } = await import('@/lib/mcp/system-servers')
+    await discoverAndCacheToolSchemas(projectId)
+    logger.info('MCP schema discovery completed and cached')
+  } catch (error) {
+    logger.warn('MCP schema discovery failed (non-blocking)', { error })
   }
 }
